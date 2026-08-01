@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zusammenfassungen</title>
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --bg:#0f1115; --bg2:#171a21; --card:#1c2029; --card2:#232834;
+    --text:#e8eaed; --muted:#9aa3b2; --line:#2a2f3a;
+    --yt:#ff4d4d; --news:#3b82f6; --mail:#10b981;
+    --accent:#ff4d4d; --accent2:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444;
+    --radius:16px; --shadow:0 6px 20px rgba(0,0,0,.35);
+  }
+  body.kind-news{ --accent:var(--news); }   /* Web-Modus: Signaturfarbe wechselt auf Blau */
+  body.kind-mail{ --accent:var(--mail); }   /* Mail-Modus: Signaturfarbe wechselt auf Gruen */
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f5f7; --bg2:#ffffff; --card:#ffffff; --card2:#f0f2f6;
+      --text:#1a1d24; --muted:#5a6573; --line:#e3e6ec; --shadow:0 6px 20px rgba(0,0,0,.08);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.5;
+    -webkit-font-smoothing:antialiased; padding-bottom:env(safe-area-inset-bottom);
+  }
+  header{
+    position:sticky; top:0; z-index:20; background:var(--bg2);
+    border-bottom:1px solid var(--line); padding:14px 16px 12px;
+    padding-top:calc(14px + env(safe-area-inset-top)); box-shadow:var(--shadow);
+  }
+  header .hrow{display:flex; align-items:center; gap:10px}
+  header .logo{font-size:22px}
+  header h1{font-size:17px; margin:0; font-weight:700; flex:1; letter-spacing:.2px}
+  .iconbtn{
+    background:var(--card2); border:1px solid var(--line); color:var(--text);
+    width:40px; height:40px; border-radius:12px; font-size:18px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; transition:.15s;
+  }
+  .iconbtn:active{transform:scale(.93)}
+
+  /* Segmentierte Umschaltung YouTube / News – das Signaturelement der App */
+  .tabs{display:flex; gap:5px; margin-top:12px; background:var(--card2);
+    padding:5px; border-radius:14px; border:1px solid var(--line)}
+  .tab{flex:1; border:none; background:transparent; color:var(--muted);
+    font-size:14px; font-weight:650; padding:9px 8px; border-radius:10px; cursor:pointer;
+    transition:.18s; display:flex; align-items:center; justify-content:center; gap:7px}
+  .tab:active{transform:scale(.97)}
+  .tab.active{background:var(--bg2); color:var(--text); box-shadow:0 1px 5px rgba(0,0,0,.18)}
+  .tab.active[data-kind="yt"]{color:var(--yt)}
+  .tab.active[data-kind="news"]{color:var(--news)}
+  .tab.active[data-kind="mail"]{color:var(--mail)}
+  @media(max-width:400px){ .tab{font-size:13px; padding:9px 4px; gap:5px} }
+  .tab .cnt{font-size:11px; font-weight:700; color:var(--muted); background:var(--card);
+    border:1px solid var(--line); border-radius:20px; padding:0 6px; min-width:18px; text-align:center}
+
+  main{max-width:780px; margin:0 auto; padding:16px}
+
+  .addbar{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:12px; margin-bottom:16px; box-shadow:var(--shadow);
+  }
+  .addbar textarea{
+    width:100%; border:1px solid var(--line); background:var(--bg); color:var(--text);
+    border-radius:12px; padding:11px 12px; font-size:15px; resize:vertical; min-height:46px;
+    font-family:inherit;
+  }
+  .addbar textarea:focus{outline:2px solid var(--accent); outline-offset:1px}
+  .addbar .row{display:flex; gap:8px; margin-top:8px; align-items:center}
+  .addbar .hint{color:var(--muted); font-size:12px; flex:1}
+  .btn{
+    border:none; border-radius:12px; padding:11px 16px; font-size:15px; font-weight:600;
+    cursor:pointer; background:var(--accent); color:#fff; transition:.15s; white-space:nowrap;
+  }
+  .btn.secondary{background:var(--card2); color:var(--text); border:1px solid var(--line)}
+  .btn:active{transform:scale(.97)}
+  .btn:disabled{opacity:.5; cursor:default}
+
+  /* Mail-Bereich: Erklaerkarte statt Eingabefeld (Mails kommen per Gmail-Label, nicht per Link) */
+  .mailbar{display:none; background:var(--card); border:1px solid var(--line);
+    border-radius:var(--radius); padding:12px; margin-bottom:16px; box-shadow:var(--shadow)}
+  body.kind-mail .mailbar{display:block}
+  body.kind-mail .addbar{display:none}
+  .mailhow{font-size:13.5px; color:var(--text)}
+  .mailhow .lbl{display:inline-block; background:rgba(16,185,129,.15); color:var(--mail);
+    border-radius:6px; padding:1px 7px; font-weight:700; font-size:12.5px; white-space:nowrap}
+  .mailsteps{display:flex; flex-direction:column; gap:4px; margin-top:8px; color:var(--muted); font-size:12.5px}
+  .attlist{display:flex; gap:6px; flex-wrap:wrap; margin-top:6px}
+  .att{font-size:11.5px; background:var(--card2); border:1px solid var(--line);
+    border-radius:7px; padding:2px 7px; color:var(--muted); max-width:100%;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+  .empty{text-align:center; color:var(--muted); padding:48px 16px}
+  .empty .big{font-size:42px; margin-bottom:8px}
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    margin-bottom:14px; overflow:hidden; box-shadow:var(--shadow); position:relative;
+  }
+  .card .head{display:flex; gap:12px; padding:12px; cursor:pointer}
+  .thumb{
+    width:120px; min-width:120px; height:68px; border-radius:10px; object-fit:cover;
+    background:var(--card2); position:relative;
+  }
+  .thumb.ph{display:flex; align-items:center; justify-content:center; font-size:26px; color:var(--muted)}
+  .thumbwrap{position:relative; width:120px; min-width:120px; height:68px}
+  .thumbwrap .dur{
+    position:absolute; right:4px; bottom:4px; background:rgba(0,0,0,.82); color:#fff;
+    font-size:11px; padding:1px 5px; border-radius:5px; font-weight:600; letter-spacing:.3px;
+  }
+  .meta{flex:1; min-width:0}
+  .meta .title{font-weight:650; font-size:15px; margin:0 0 3px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+  .meta .sub{color:var(--muted); font-size:12.5px; display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+  .badge{font-size:11px; padding:2px 8px; border-radius:20px; font-weight:600; display:inline-flex; gap:4px; align-items:center}
+  .badge.pending{background:rgba(245,158,11,.15); color:var(--warn)}
+  .badge.processing{background:rgba(59,130,246,.15); color:var(--accent2)}
+  .badge.done{background:rgba(34,197,94,.15); color:var(--ok)}
+  .badge.error{background:rgba(239,68,68,.15); color:var(--err)}
+  .spin{display:inline-block; width:10px; height:10px; border:2px solid currentColor;
+    border-right-color:transparent; border-radius:50%; animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  .body{border-top:1px solid var(--line); padding:14px 14px 4px; display:none}
+  .card.open .body{display:block}
+  .body .summary{font-size:14.5px}
+  .summary h2{font-size:17px; margin:14px 0 6px}
+  .summary h3{font-size:15.5px; margin:13px 0 5px}
+  .summary h4{font-size:14.5px; margin:12px 0 4px; color:var(--muted)}
+  .summary p{margin:7px 0}
+  .summary ul,.summary ol{margin:6px 0 6px 2px; padding-left:20px}
+  .summary li{margin:3px 0}
+  .summary code{background:var(--card2); padding:1px 5px; border-radius:5px; font-size:13px}
+  .summary a{color:var(--accent2)}
+  /* Vorlese-Leiste (oben im aufgeklappten Artikel) */
+  .ttsbar{display:flex; gap:7px; align-items:center; flex-wrap:wrap;
+    padding:0 0 11px; margin-bottom:11px; border-bottom:1px solid var(--line)}
+  .ttsbtn{border:1px solid var(--line); background:var(--card2); color:var(--text);
+    border-radius:10px; padding:8px 12px; font-size:13px; font-weight:600; cursor:pointer;
+    display:inline-flex; gap:6px; align-items:center; white-space:nowrap}
+  .ttsbtn:active{transform:scale(.96)}
+  .ttsbtn.primary{background:var(--accent); color:#fff; border-color:transparent}
+  .ttsrate{border:1px solid var(--line); background:var(--card2); color:var(--muted);
+    border-radius:10px; padding:8px 6px; font-size:12.5px; margin-left:auto}
+  .ttsprog{font-size:12px; color:var(--muted); margin-left:auto; white-space:nowrap}
+  .ttsnote{font-size:12px; color:var(--muted); flex-basis:100%}
+
+  .errbox{background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.3);
+    color:var(--err); padding:10px 12px; border-radius:10px; font-size:13.5px; margin:4px 0 10px}
+
+  .actions{display:flex; gap:7px; flex-wrap:wrap; padding:10px 0 14px; border-top:1px solid var(--line); margin-top:10px}
+  .chip{
+    border:1px solid var(--line); background:var(--card2); color:var(--text);
+    border-radius:10px; padding:8px 11px; font-size:13px; cursor:pointer; display:inline-flex; gap:5px; align-items:center;
+  }
+  .chip:active{transform:scale(.96)}
+  .chip.danger{color:var(--err)}
+  select.lang{
+    border:1px solid var(--line); background:var(--card2); color:var(--text);
+    border-radius:10px; padding:8px 9px; font-size:13px;
+  }
+
+  /* Modal */
+  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; z-index:50;
+    align-items:flex-end; justify-content:center}
+  .overlay.show{display:flex}
+  .modal{background:var(--bg2); width:100%; max-width:520px; border-radius:20px 20px 0 0;
+    padding:20px 18px calc(22px + env(safe-area-inset-bottom)); box-shadow:var(--shadow);
+    max-height:88vh; overflow:auto}
+  @media(min-width:560px){.overlay{align-items:center} .modal{border-radius:20px}}
+  .modal h2{margin:0 0 4px; font-size:19px}
+  .modal p.desc{color:var(--muted); font-size:13.5px; margin:0 0 16px}
+  .field{margin-bottom:14px}
+  .field label{display:block; font-size:13px; font-weight:600; margin-bottom:5px}
+  .field input,.field select{width:100%; border:1px solid var(--line); background:var(--bg);
+    color:var(--text); border-radius:11px; padding:11px 12px; font-size:15px; font-family:inherit}
+  .field .help{color:var(--muted); font-size:12px; margin-top:4px}
+  .modal .btnrow{display:flex; gap:8px; margin-top:8px}
+  .modal .btnrow .btn{flex:1}
+  .testline{font-size:13px; margin-top:10px; min-height:18px}
+
+  /* Toast */
+  #toasts{position:fixed; left:0; right:0; bottom:16px; z-index:80; display:flex; flex-direction:column;
+    align-items:center; gap:8px; pointer-events:none; padding:0 16px}
+  .toast{background:#222b; color:#fff; backdrop-filter:blur(8px); padding:11px 16px; border-radius:12px;
+    font-size:14px; box-shadow:var(--shadow); max-width:520px; animation:tin .2s ease}
+  .toast.ok{background:rgba(34,197,94,.95)} .toast.err{background:rgba(239,68,68,.95)}
+  @keyframes tin{from{transform:translateY(10px);opacity:0}}
+  .notice{background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.4); color:var(--warn);
+    padding:12px 14px; border-radius:12px; font-size:13.5px; margin-bottom:14px; display:none}
+  .notice.show{display:block}
+  .notice a{color:inherit; text-decoration:underline; cursor:pointer}
+
+  /* Statistik-Zeile (Datum, Aufrufe, Likes, Kommentare, Autor) auf der Karte */
+  .stats{color:var(--muted); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; margin-top:4px}
+  .stats span{white-space:nowrap}
+
+  /* Wischen zum Löschen */
+  .card .delbg{position:absolute; inset:0; background:var(--err); color:#fff; display:flex;
+    align-items:center; justify-content:flex-end; gap:6px; padding:0 22px; font-weight:700; font-size:14px}
+  .card .swipe{position:relative; z-index:1; background:var(--card); touch-action:pan-y}
+
+  /* Auswahlmodus */
+  .card.selected{outline:2px solid var(--accent2); outline-offset:-2px}
+  .card.selected .swipe{background:var(--card2)}
+  .selmark{display:none; width:24px; min-width:24px; height:24px; border-radius:50%;
+    border:2px solid var(--muted); align-self:center; margin-right:2px; color:#fff; font-size:14px;
+    line-height:20px; text-align:center}
+  body.selmode .selmark{display:block}
+  .card.selected .selmark{background:var(--accent2); border-color:var(--accent2)}
+
+  /* Auswahl-Werkzeugleiste unten */
+  .selbar{position:fixed; left:0; right:0; bottom:0; z-index:60; background:var(--bg2);
+    border-top:1px solid var(--line); display:none; align-items:center; gap:10px;
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom)); box-shadow:0 -4px 20px rgba(0,0,0,.3)}
+  body.selmode .selbar{display:flex}
+  .selbar .cnt{flex:1; font-weight:600; font-size:15px}
+
+  /* Fragen zum Inhalt (Q&A) */
+  .qa{border-top:1px solid var(--line); margin-top:12px; padding-top:12px}
+  .qa .qtitle{font-size:13px; font-weight:700; color:var(--muted); margin-bottom:10px}
+  .qitem{margin-bottom:12px}
+  .qitem .q{background:var(--card2); border-radius:10px; padding:8px 11px; font-size:14px; font-weight:600; margin-bottom:6px}
+  .qitem .a{font-size:14px; padding:0 2px}
+  .qarow{display:flex; gap:7px; margin-top:6px}
+  .qain{flex:1; border:1px solid var(--line); background:var(--bg); color:var(--text);
+    border-radius:10px; padding:10px 12px; font-size:14px; font-family:inherit; min-width:0}
+  .qain:focus{outline:2px solid var(--accent2)}
+
+  /* Suchleiste */
+  .searchbar{margin-bottom:14px}
+  .searchbar input{
+    width:100%; border:1px solid var(--line); background:var(--card); color:var(--text);
+    border-radius:var(--radius); padding:12px 14px; font-size:15px; font-family:inherit;
+    box-shadow:var(--shadow);
+  }
+  .searchbar input:focus{outline:2px solid var(--accent); outline-offset:1px}
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow">
+    <span class="logo" id="logo">🎬</span>
+    <h1>Zusammenfassungen</h1>
+    <button class="iconbtn" id="refreshBtn" title="Aktualisieren">↻</button>
+    <button class="iconbtn" id="settingsBtn" title="Einstellungen">⚙️</button>
+  </div>
+  <div class="tabs" id="tabs">
+    <button class="tab" data-kind="yt">🎬 <span class="tl">YouTube</span> <span class="cnt" id="cntYt"></span></button>
+    <button class="tab" data-kind="news">📰 <span class="tl">Web</span> <span class="cnt" id="cntNews"></span></button>
+    <button class="tab" data-kind="mail">📧 <span class="tl">Mail</span> <span class="cnt" id="cntMail"></span></button>
+  </div>
+</header>
+
+<main>
+  <div class="notice" id="notice"></div>
+
+  <div class="addbar" id="addbar">
+    <textarea id="addInput"></textarea>
+    <div class="row">
+      <span class="hint" id="addHint"></span>
+      <button class="btn" id="addBtn">Hinzufügen</button>
+    </div>
+  </div>
+
+  <div class="mailbar" id="mailbar">
+    <div class="mailhow">
+      <strong>So fasst du eine Mail zusammen:</strong> Öffne sie in Gmail (Handy oder PC) und
+      vergib das Label <span class="lbl">Zusammenfassen</span>. Die App holt sie dann automatisch
+      – samt Anhängen (PDF, Bilder, Textdateien).
+      <div class="mailsteps">
+        <span>📱 <b>Handy:</b> Mail öffnen → ⋮ oben rechts → „Labels ändern" → Häkchen setzen</span>
+        <span>💻 <b>PC:</b> Mail öffnen → Label-Symbol 🏷️ in der Leiste → Häkchen setzen</span>
+      </div>
+    </div>
+    <div class="row">
+      <span class="hint">Prüft sonst automatisch jede Minute.</span>
+      <button class="btn" id="scanBtn">Jetzt nachsehen</button>
+    </div>
+  </div>
+
+  <div class="searchbar">
+    <input id="searchInput" type="search" placeholder="🔍 Suchen: Titel, Quelle, Inhalt …" autocomplete="off">
+  </div>
+
+  <div id="list"></div>
+</main>
+
+<!-- Einstellungen -->
+<div class="overlay" id="settingsOverlay">
+  <div class="modal">
+    <h2>Einstellungen</h2>
+    <p class="desc">Verbinde die App mit deinem Apps-Script-Backend. Beides bekommst du in der SETUP-Anleitung.</p>
+    <div class="field">
+      <label>Web-App-URL (Apps Script)</label>
+      <input id="cfgEndpoint" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+      <div class="help">Die URL aus „Bereitstellen → Web-App".</div>
+    </div>
+    <div class="field">
+      <label>Geheimes Passwort (Token)</label>
+      <input id="cfgSecret" type="text" placeholder="dein selbst gewähltes Passwort" autocomplete="off">
+      <div class="help">Muss exakt dem SHARED_SECRET im Skript entsprechen.</div>
+    </div>
+    <div class="field">
+      <label>Standardsprache neuer Zusammenfassungen</label>
+      <select id="cfgLang"></select>
+      <div class="help">Pro Eintrag kannst du später jederzeit umschalten/übersetzen.</div>
+    </div>
+    <div class="testline" id="testLine"></div>
+    <div class="btnrow">
+      <button class="btn secondary" id="testBtn">Verbindung testen</button>
+      <button class="btn" id="saveBtn">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- Auswahl-Werkzeugleiste (Mehrfachauswahl) -->
+<div class="selbar" id="selbar">
+  <button class="iconbtn" id="selCancel" title="Abbrechen">✕</button>
+  <span class="cnt" id="selCount">0 ausgewählt</span>
+  <button class="btn" id="selDelete">🗑️ Löschen</button>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+
+/* ----------------------------- Konfiguration ---------------------------- */
+var LANGS = ["Deutsch","Englisch","Französisch","Spanisch","Italienisch","Portugiesisch",
+  "Niederländisch","Türkisch","Polnisch","Russisch","Arabisch","Chinesisch","Japanisch","Koreanisch"];
+
+var cfg = {
+  endpoint: localStorage.getItem("cfg_endpoint") || localStorage.getItem("yt_endpoint") || "",
+  secret:   localStorage.getItem("cfg_secret")   || localStorage.getItem("yt_secret")   || "",
+  lang:     localStorage.getItem("cfg_lang")     || localStorage.getItem("yt_lang")      || "Deutsch"
+};
+
+/* Zwei getrennte Datensätze (YouTube / News), jeder mit eigenem UI-Zustand. */
+function mkState(cacheKey){
+  return { entries: JSON.parse(localStorage.getItem(cacheKey)||"[]"),
+    viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey };
+}
+var KINDS = ["yt","news","mail"];
+var store = { yt: mkState("yt_cache"), news: mkState("news_cache"), mail: mkState("mail_cache") };
+var kind = (KINDS.indexOf(localStorage.getItem("active_kind")) >= 0)
+  ? localStorage.getItem("active_kind") : "yt";
+function S(){ return store[kind]; }
+
+var pollTimer = null;
+var selectionMode = false;
+var exitArmed = false;
+var GUARD = { t: "guard" };
+var touch = null;
+var suppressClickUntil = 0;
+
+var KIND_UI = {
+  yt:   { logo:"🎬", placeholder:"YouTube-Link(s) hier einfügen – mehrere Links (eine Zeile pro Link) für Stapelverarbeitung",
+          hint:"Tipp: In YouTube auf „Teilen“ → diese App wählen.", open:"▶️ Auf YouTube", noun1:"Video", nounN:"Videos",
+          qtitle:"❓ Eigene Fragen zum Video", qph:"z. B. Was sind die 3 wichtigsten Punkte?" },
+  news: { logo:"📰", placeholder:"Link(s) hier einfügen – mehrere Links (eine Zeile pro Link) für Stapelverarbeitung",
+          hint:"Tipp: In Chrome auf „Teilen“ → diese App wählen.", open:"🔗 Seite öffnen", noun1:"Seite", nounN:"Seiten",
+          qtitle:"❓ Eigene Fragen zum Artikel", qph:"z. B. Was ist die Kernaussage?" },
+  mail: { logo:"📧", placeholder:"", hint:"", open:"📧 In Gmail öffnen", noun1:"Mail", nounN:"Mails",
+          qtitle:"❓ Eigene Fragen zur Mail", qph:"z. B. Was muss ich bis wann tun?" }
+};
+
+/* ------------------------------- Helfer --------------------------------- */
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+function toast(msg, kind2){
+  var t = document.createElement("div");
+  t.className = "toast" + (kind2 ? " "+kind2 : "");
+  t.textContent = msg;
+  $("toasts").appendChild(t);
+  setTimeout(function(){ t.style.transition="opacity .3s"; t.style.opacity="0";
+    setTimeout(function(){ t.remove(); }, 300); }, kind2==="err" ? 4200 : 2600);
+}
+
+/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet. */
+function api(params){
+  return new Promise(function(resolve, reject){
+    if(!cfg.endpoint || !cfg.secret){ reject(new Error("NO_CONFIG")); return; }
+    var cb = "__cb" + Math.random().toString(36).slice(2);
+    var script = document.createElement("script");
+    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server nicht erreichbar.")); }, 95000);
+    function cleanup(){ clearTimeout(timer); delete window[cb]; if(script.parentNode) script.parentNode.removeChild(script); }
+    window[cb] = function(data){ cleanup(); resolve(data); };
+    var q = Object.assign({ kind: kind }, params, { token: cfg.secret, callback: cb });
+    var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+"="+encodeURIComponent(q[k]); }).join("&");
+    script.src = cfg.endpoint + (cfg.endpoint.indexOf("?")>-1?"&":"?") + qs;
+    script.onerror = function(){ cleanup(); reject(new Error("Netzwerkfehler beim Aufruf des Backends.")); };
+    document.body.appendChild(script);
+  });
+}
+
+/* ------------------------- Mini-Markdown-Renderer ----------------------- */
+function renderMarkdown(md){
+  function inline(s){
+    return esc(s)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+  var lines = String(md||"").replace(/\r/g,"").split("\n");
+  var out = [], i = 0;
+  function isUL(l){ return /^\s*[-*]\s+/.test(l); }
+  function isOL(l){ return /^\s*\d+\.\s+/.test(l); }
+  function isH(l){ return /^(#{1,6})\s+/.test(l); }
+  while(i < lines.length){
+    var line = lines[i];
+    var h = line.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ var lvl = Math.min(h[1].length+1, 4); out.push("<h"+lvl+">"+inline(h[2])+"</h"+lvl+">"); i++; continue; }
+    if(isUL(line)){ out.push("<ul>"); while(i<lines.length && isUL(lines[i])){ out.push("<li>"+inline(lines[i].replace(/^\s*[-*]\s+/,""))+"</li>"); i++; } out.push("</ul>"); continue; }
+    if(isOL(line)){ out.push("<ol>"); while(i<lines.length && isOL(lines[i])){ out.push("<li>"+inline(lines[i].replace(/^\s*\d+\.\s+/,""))+"</li>"); i++; } out.push("</ol>"); continue; }
+    if(/^\s*$/.test(line)){ i++; continue; }
+    var para = [];
+    while(i<lines.length && !/^\s*$/.test(lines[i]) && !isUL(lines[i]) && !isOL(lines[i]) && !isH(lines[i])){ para.push(lines[i]); i++; }
+    out.push("<p>"+inline(para.join(" "))+"</p>");
+  }
+  return out.join("\n");
+}
+
+/* ------------------------------ Vorlesen -------------------------------- */
+/* Nutzt die Sprachausgabe des Geräts (auf dem Pixel die Google-Stimmen).
+   Kostenlos, funktioniert offline und braucht kein Backend. */
+
+var LANG_CODE = { "Deutsch":"de-DE", "Englisch":"en-US", "Französisch":"fr-FR", "Spanisch":"es-ES",
+  "Italienisch":"it-IT", "Portugiesisch":"pt-PT", "Niederländisch":"nl-NL", "Türkisch":"tr-TR",
+  "Polnisch":"pl-PL", "Russisch":"ru-RU", "Arabisch":"ar-SA", "Chinesisch":"zh-CN",
+  "Japanisch":"ja-JP", "Koreanisch":"ko-KR" };
+
+var TTS_OK = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
+var tts = { id:null, mode:null, chunks:[], i:0, playing:false, paused:false, lang:"de-DE" };
+var ttsRate = parseFloat(localStorage.getItem("tts_rate") || "1") || 1;
+
+/* Einleitung für "TL;DR" je Sprache (sonst würde die Abkürzung buchstabiert). */
+var TLDR_SAY = { "Deutsch":"Kurz gesagt", "Englisch":"In short", "Französisch":"En bref",
+  "Spanisch":"En resumen", "Italienisch":"In breve", "Portugiesisch":"Em resumo",
+  "Niederländisch":"Kort gezegd", "Türkisch":"Kısaca", "Polnisch":"W skrócie",
+  "Russisch":"Кратко", "Arabisch":"باختصار", "Chinesisch":"简而言之",
+  "Japanisch":"要するに", "Koreanisch":"요약하면" };
+
+/* Markdown in gut sprechbaren Fließtext umwandeln (Zeichen, die vorgelesen würden, entfernen). */
+function speakableText(md, lang){
+  return String(md||"")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*#{1,6}\s*(.+)$/gm, "$1.")           // Überschriften als Satz
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, "$1")  // Linktext behalten, URL weglassen
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/^\s*[-*]\s+/gm, "")                     // Aufzählungszeichen
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/TL;DR/gi, TLDR_SAY[lang] || TLDR_SAY["Deutsch"])
+    .replace(/[|>#_~]/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    // Jede Zeile als eigener Satz beenden -> die Stimme macht hörbar Pausen zwischen Stichpunkten
+    .split("\n").map(function(l){
+      l = l.trim();
+      if(!l) return "";
+      return /[.!?…:,]$/.test(l) ? l : l + ".";
+    }).filter(Boolean).join("\n")
+    .replace(/\.{2,}/g, ".")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .trim();
+}
+
+/* Kurzfassung = alles bis zur zweiten Zwischenüberschrift (TL;DR + Kernpunkte). */
+function shortPart(md){
+  var lines = String(md||"").split("\n");
+  var out = [], seen = 0;
+  for(var i=0;i<lines.length;i++){
+    if(/^\s*#{1,6}\s+/.test(lines[i])){
+      seen++;
+      if(seen >= 2) break;
+    }
+    out.push(lines[i]);
+  }
+  var t = out.join("\n").trim();
+  return t.length > 40 ? t : String(md||"").slice(0, 700);
+}
+
+/* Text in kurze Häppchen zerlegen – lange Texte brechen auf Android sonst ab. */
+function ttsChunks(text){
+  var parts = String(text||"").replace(/\s+/g," ").match(/[^.!?…]+[.!?…]*\s*/g) || [];
+  var out = [], cur = "";
+  parts.forEach(function(p){
+    if((cur + p).length > 180){ if(cur.trim()) out.push(cur.trim()); cur = p; }
+    else cur += p;
+    while(cur.length > 240){ out.push(cur.slice(0,240).trim()); cur = cur.slice(240); }
+  });
+  if(cur.trim()) out.push(cur.trim());
+  return out.filter(function(s){ return /[A-Za-zÀ-ÿ0-9]/.test(s); });
+}
+
+function pickVoice(code){
+  var voices = window.speechSynthesis.getVoices() || [];
+  if(!voices.length) return null;
+  var base = code.split("-")[0];
+  var cand = voices.filter(function(v){ return v.lang && v.lang.replace("_","-").toLowerCase().indexOf(base) === 0; });
+  if(!cand.length) return null;
+  // Bevorzugt die natürlicheren Google-/Neural-Stimmen, sonst die erste passende
+  var better = cand.filter(function(v){ return /google|neural|natural|enhanced|premium/i.test(v.name); });
+  var exact = (better.length?better:cand).filter(function(v){ return v.lang.replace("_","-").toLowerCase() === code.toLowerCase(); });
+  return exact[0] || (better[0] || cand[0]);
+}
+
+function ttsStop(){
+  tts.id = null; tts.mode = null; tts.chunks = []; tts.i = 0;
+  tts.playing = false; tts.paused = false;
+  if(TTS_OK){ try{ window.speechSynthesis.cancel(); }catch(e){} }
+  updateTtsBars();
+}
+
+function ttsSpeakNext(){
+  if(!tts.playing || tts.i >= tts.chunks.length){
+    if(tts.i >= tts.chunks.length && tts.playing) ttsStop();
+    return;
+  }
+  var u = new SpeechSynthesisUtterance(tts.chunks[tts.i]);
+  u.lang = tts.lang;
+  u.rate = ttsRate;
+  var v = pickVoice(tts.lang);
+  if(v) u.voice = v;
+  u.onend = function(){
+    if(!tts.playing) return;
+    tts.i++;
+    updateTtsBars();
+    ttsSpeakNext();
+  };
+  u.onerror = function(ev){
+    if(!tts.playing) return;
+    if(ev && ev.error === "interrupted") return;   // durch Stopp/Neustart ausgelöst
+    tts.i++;
+    if(tts.i < tts.chunks.length) ttsSpeakNext(); else ttsStop();
+  };
+  try{ window.speechSynthesis.speak(u); }catch(e){ ttsStop(); }
+}
+
+function ttsStart(id, mode){
+  if(!TTS_OK){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
+  var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e || e.status !== "done"){ toast("Erst wenn die Zusammenfassung fertig ist.", "err"); return; }
+  var current = S().viewLang[id] || e.language || "Deutsch";
+  var md = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
+  var raw = (mode === "short") ? shortPart(md) : md;
+  var text = speakableText(raw, current);
+  if(mode !== "short"){
+    // Beim vollständigen Vorlesen auch Titel und (falls vorhanden) eigene Fragen mitnehmen
+    text = speakableText(e.title || "", current) + ". " + text;
+    (e.qa||[]).forEach(function(x){
+      text += " " + speakableText(x.q, current) + ". " + speakableText(x.a, current) + ".";
+    });
+  }
+  var chunks = ttsChunks(text);
+  if(!chunks.length){ toast("Nichts zum Vorlesen gefunden.", "err"); return; }
+  try{ window.speechSynthesis.cancel(); }catch(err){}
+  tts.id = id; tts.mode = mode; tts.chunks = chunks; tts.i = 0;
+  tts.playing = true; tts.paused = false;
+  tts.lang = LANG_CODE[current] || "de-DE";
+  updateTtsBars();
+  ttsSpeakNext();
+}
+
+function ttsToggle(){
+  if(!tts.playing) return;
+  try{
+    if(tts.paused){ window.speechSynthesis.resume(); tts.paused = false; }
+    else { window.speechSynthesis.pause(); tts.paused = true; }
+  }catch(e){}
+  updateTtsBars();
+}
+
+/* Nur die Vorlese-Leisten aktualisieren (nicht die ganze Liste neu zeichnen). */
+function updateTtsBars(){
+  var bars = document.querySelectorAll(".ttsbar");
+  for(var i=0;i<bars.length;i++){
+    bars[i].innerHTML = ttsBarInner(bars[i].getAttribute("data-id"));
+  }
+}
+
+function ttsBarInner(id){
+  if(!TTS_OK) return '<span class="ttsnote">Vorlesen wird von diesem Browser nicht unterstützt.</span>';
+  var active = tts.playing && String(tts.id) === String(id);
+  if(active){
+    var pct = tts.chunks.length ? Math.min(100, Math.round(tts.i / tts.chunks.length * 100)) : 0;
+    return '<button class="ttsbtn primary" data-act="tts-toggle">'+(tts.paused?"▶️ Weiter":"⏸️ Pause")+'</button>'+
+           '<button class="ttsbtn" data-act="tts-stop">⏹️ Stopp</button>'+
+           '<span class="ttsprog">'+(tts.mode==="short"?"Kurzfassung":"Alles")+' · '+pct+'%</span>';
+  }
+  var rate = [["0.8","langsam"],["1","normal"],["1.25","zügig"],["1.5","schnell"]].map(function(r){
+    return '<option value="'+r[0]+'"'+(parseFloat(r[0])===ttsRate?" selected":"")+'>'+r[1]+'</option>';
+  }).join("");
+  return '<button class="ttsbtn primary" data-act="tts-full">🔊 Alles vorlesen</button>'+
+         '<button class="ttsbtn" data-act="tts-short">⚡ Nur Kurzfassung</button>'+
+         '<select class="ttsrate" data-act="tts-rate" title="Vorlese-Tempo">'+rate+'</select>';
+}
+
+if(TTS_OK && window.speechSynthesis.onvoiceschanged !== undefined){
+  window.speechSynthesis.onvoiceschanged = function(){ /* Stimmen nachgeladen */ };
+}
+window.addEventListener("beforeunload", function(){ if(TTS_OK) try{ window.speechSynthesis.cancel(); }catch(e){} });
+
+/* ------------------------------- Rendern -------------------------------- */
+function fmtDay(iso){
+  if(!iso) return "";
+  var d = new Date(iso); if(isNaN(d)) return String(iso);
+  return d.toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"numeric"});
+}
+function fmtCount(n){
+  n = parseInt(n,10); if(isNaN(n)) return "";
+  function trim(s){ return s.replace(",0",""); }
+  if(n>=1e9) return trim((n/1e9).toFixed(1).replace(".",","))+" Mrd.";
+  if(n>=1e6) return trim((n/1e6).toFixed(1).replace(".",","))+" Mio.";
+  if(n>=1e3) return trim((n/1e3).toFixed(1).replace(".",","))+" Tsd.";
+  return String(n);
+}
+var STATUS_LABEL = { pending:"⏳ in Warteschlange", processing:"⚙️ wird zusammengefasst", done:"✅ fertig", error:"⚠️ Fehler" };
+
+function signature(arr){
+  return arr.map(function(e){
+    return e.id+":"+e.status+":"+((e.title||"").length)+":"+((e.summary||"").length)+":"+(e.durationText||"")+
+      ":"+(e.viewCount||"")+":"+(e.likeCount||"")+":"+(e.commentCount||"")+":"+(e.publishedAt||"")+
+      ":"+(e.source||"")+":"+(e.author||"")+":"+((e.image||"").length)+":"+((e.qa||[]).length)+
+      ":"+((e.attachments||[]).length);
+  }).join("|");
+}
+
+/* Sucht in Titel, Kanal/Quelle, Autor, Zusammenfassung, Übersetzungen und Fragen/Antworten. */
+function matchesSearch(e){
+  var qy = S().search;
+  if(!qy) return true;
+  var hay = [e.title, e.channel, e.source, e.author, e.summary].concat(e.attachments || []);
+  var tr = e.translations || {};
+  for(var k in tr){ if(k.charAt(0) !== "_") hay.push(tr[k]); }
+  (e.qa||[]).forEach(function(x){ hay.push(x.q, x.a); });
+  var text = hay.map(function(s){ return String(s==null?"":s); }).join(" ").toLowerCase();
+  return qy.toLowerCase().split(/\s+/).every(function(term){ return text.indexOf(term) !== -1; });
+}
+
+function render(){
+  var list = $("list");
+  var entries = S().entries;
+  var y = window.scrollY;
+  updateCounts();
+  if(!entries.length){
+    var EMPTY = {
+      yt:   "Noch keine Videos. Teile ein YouTube-Video an diese App oder füge oben Link(s) ein.",
+      news: "Noch keine Seiten. Teile einen Artikel an diese App oder füge oben Link(s) ein.",
+      mail: "Noch keine Mails. Vergib in Gmail das Label „Zusammenfassen“ – siehe Hinweis oben."
+    };
+    var emptyMsg = cfg.endpoint ? EMPTY[kind] : "Bitte zuerst oben rechts unter ⚙️ die Verbindung einrichten.";
+    list.innerHTML = '<div class="empty"><div class="big">'+(kind==="mail"?"📧":"📭")+'</div>'+emptyMsg+'</div>';
+    return;
+  }
+  var shown = entries.filter(matchesSearch);
+  if(!shown.length){
+    list.innerHTML = '<div class="empty"><div class="big">🔍</div>Keine Treffer für „'+esc(S().search)+'".</div>';
+    return;
+  }
+  list.innerHTML = shown.map(cardHtml).join("");
+  window.scrollTo(0, y);
+}
+
+function cardHtml(e){
+  if(kind==="mail") return mailCardHtml(e);
+  return kind==="news" ? newsCardHtml(e) : ytCardHtml(e);
+}
+
+function mailCardHtml(e){
+  var st = e.status || "pending";
+  var badge = STATUS_LABEL[st] || st;
+  var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
+
+  var stats = [];
+  if(e.publishedAt) stats.push('<span>📅 '+esc(fmtDay(e.publishedAt))+'</span>');
+  var atts = e.attachments || [];
+  if(atts.length) stats.push('<span>📎 '+atts.length+'</span>');
+  var statsHtml = stats.length ? '<div class="stats">'+stats.join("")+'</div>' : "";
+  var attHtml = atts.length
+    ? '<div class="attlist">'+atts.map(function(n){ return '<span class="att">📎 '+esc(n)+'</span>'; }).join("")+'</div>'
+    : "";
+
+  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"");
+  return ''+
+  '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
+    '<div class="delbg">🗑️ Löschen</div>'+
+    '<div class="swipe">'+
+      '<div class="head" data-toggle>'+
+        '<div class="selmark">'+(S().selected[e.id]?"✓":"")+'</div>'+
+        '<div class="thumbwrap"><div class="thumb ph">📧</div></div>'+
+        '<div class="meta">'+
+          '<p class="title">'+esc(e.title || "(kein Betreff)")+'</p>'+
+          '<div class="sub"><span class="badge '+st+'">'+spin+badge+'</span>'+
+            (e.source?'<span>'+esc(e.source)+'</span>':'')+'</div>'+
+          statsHtml+
+          attHtml+
+        '</div>'+
+      '</div>'+
+      commonBody(e, "📧 In Gmail öffnen")+
+    '</div>'+
+  '</div>';
+}
+
+function commonBody(e, openLabel){
+  var st = e.status || "pending";
+  var langSel = LANGS.map(function(l){ return '<option value="'+l+'"'+(S().viewLang[e.id]===l?' selected':'')+'>'+l+'</option>'; }).join("");
+  var bodyInner = "";
+  if(st === "error"){
+    bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>';
+  } else if(st === "done"){
+    var current = S().viewLang[e.id] || e.language || "Deutsch";
+    var text = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
+    bodyInner = '<div class="ttsbar" data-id="'+esc(e.id)+'">'+ttsBarInner(e.id)+'</div>'+
+                '<div class="summary">'+renderMarkdown(text)+'</div>' + qaHtml(e);
+  } else {
+    bodyInner = '<p style="color:var(--muted)">Wird im Hintergrund verarbeitet – das geschieht automatisch, du musst nichts tun.</p>';
+  }
+  return '<div class="body">'+
+    bodyInner+
+    '<div class="actions">'+
+      '<a class="chip" href="'+esc(e.url)+'" target="_blank" rel="noopener">'+openLabel+'</a>'+
+      (st==="done" ? '<button class="chip" data-act="copy">📋 Kopieren</button>'+
+          '<select class="lang" data-act="translate" title="Sprache wechseln / übersetzen">'+
+            '<option value="">🌐 Übersetzen…</option>'+langSel+'</select>' : '')+
+      (st==="error" ? '<button class="chip" data-act="retry">🔄 Erneut versuchen</button>' : '')+
+      '<button class="chip danger" data-act="delete">🗑️ Löschen</button>'+
+    '</div>'+
+  '</div>';
+}
+
+function ytCardHtml(e){
+  var st = e.status || "pending";
+  var badge = STATUS_LABEL[st] || st;
+  var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
+  var dur = e.durationText ? '<span class="dur">'+esc(e.durationText)+'</span>' : "";
+
+  var stats = [];
+  if(e.publishedAt) stats.push('<span>📅 '+esc(fmtDay(e.publishedAt))+'</span>');
+  if(e.viewCount!=="" && e.viewCount!=null) stats.push('<span>👁 '+esc(fmtCount(e.viewCount))+'</span>');
+  if(e.likeCount!=="" && e.likeCount!=null) stats.push('<span>👍 '+esc(fmtCount(e.likeCount))+'</span>');
+  if(e.commentCount!=="" && e.commentCount!=null) stats.push('<span>💬 '+esc(fmtCount(e.commentCount))+'</span>');
+  var statsHtml = stats.length ? '<div class="stats">'+stats.join("")+'</div>' : "";
+
+  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"");
+  return ''+
+  '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
+    '<div class="delbg">🗑️ Löschen</div>'+
+    '<div class="swipe">'+
+      '<div class="head" data-toggle>'+
+        '<div class="selmark">'+(S().selected[e.id]?"✓":"")+'</div>'+
+        '<div class="thumbwrap"><img class="thumb" loading="lazy" src="'+esc(e.thumbnail||"")+'" alt="">'+dur+'</div>'+
+        '<div class="meta">'+
+          '<p class="title">'+esc(e.title || "(wird geladen …)")+'</p>'+
+          '<div class="sub"><span class="badge '+st+'">'+spin+badge+'</span>'+
+            (e.channel?'<span>'+esc(e.channel)+'</span>':'')+'</div>'+
+          statsHtml+
+        '</div>'+
+      '</div>'+
+      commonBody(e, "▶️ Auf YouTube")+
+    '</div>'+
+  '</div>';
+}
+
+function newsCardHtml(e){
+  var st = e.status || "pending";
+  var badge = STATUS_LABEL[st] || st;
+  var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
+
+  var thumb = e.image
+    ? '<img class="thumb" loading="lazy" src="'+esc(e.image)+'" alt="" onerror="this.style.display=\'none\'">'
+    : '<div class="thumb ph">📰</div>';
+
+  var stats = [];
+  if(e.publishedAt) stats.push('<span>📅 '+esc(fmtDay(e.publishedAt))+'</span>');
+  if(e.author) stats.push('<span>✍️ '+esc(e.author)+'</span>');
+  var statsHtml = stats.length ? '<div class="stats">'+stats.join("")+'</div>' : "";
+
+  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"");
+  return ''+
+  '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
+    '<div class="delbg">🗑️ Löschen</div>'+
+    '<div class="swipe">'+
+      '<div class="head" data-toggle>'+
+        '<div class="selmark">'+(S().selected[e.id]?"✓":"")+'</div>'+
+        '<div class="thumbwrap">'+thumb+'</div>'+
+        '<div class="meta">'+
+          '<p class="title">'+esc(e.title || "(wird geladen …)")+'</p>'+
+          '<div class="sub"><span class="badge '+st+'">'+spin+badge+'</span>'+
+            (e.source?'<span>'+esc(e.source)+'</span>':'')+'</div>'+
+          statsHtml+
+        '</div>'+
+      '</div>'+
+      commonBody(e, "🔗 Artikel öffnen")+
+    '</div>'+
+  '</div>';
+}
+
+function qaHtml(e){
+  var ui = KIND_UI[kind];
+  var items = (e.qa||[]).map(function(x){
+    return '<div class="qitem"><div class="q">🙋 '+esc(x.q)+'</div><div class="a">'+renderMarkdown(x.a)+'</div></div>';
+  }).join("");
+  var draft = S().qaDraft[e.id] || "";
+  return '<div class="qa">'+
+    '<div class="qtitle">'+ui.qtitle+'</div>'+
+    items+
+    '<div class="qarow">'+
+      '<input class="qain" type="text" placeholder="'+esc(ui.qph)+'" value="'+esc(draft)+'">'+
+      '<button class="chip" data-act="ask">Fragen</button>'+
+    '</div>'+
+  '</div>';
+}
+
+/* --------------------------- Liste aktualisieren ------------------------ */
+function refresh(k){
+  k = k || kind;
+  if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
+  var prevKind = kind, tmp = kind;
+  return apiFor(k, { action:"list" }).then(function(res){
+    if(res && res.ok){
+      store[k].entries = res.entries || [];
+      localStorage.setItem(store[k].cacheKey, JSON.stringify(store[k].entries));
+      if(k === kind){
+        var sig = signature(store[k].entries);
+        var typing = document.activeElement && document.activeElement.classList &&
+                     document.activeElement.classList.contains("qain");
+        if(sig !== store[k].lastSig && !typing){ store[k].lastSig = sig; render(); }
+      } else {
+        updateCounts();
+      }
+      schedulePolling();
+    } else if(res && res.error){
+      toast(res.error, "err");
+    }
+  }).catch(function(err){
+    if(err.message !== "NO_CONFIG") toast(err.message, "err");
+  });
+}
+
+/* api-Aufruf für eine bestimmte Art (unabhängig von der aktiven Ansicht). */
+function apiFor(k, params){
+  var saved = kind; kind = k;
+  var pr = api(params);
+  kind = saved;
+  return pr;
+}
+
+function refreshAll(){ KINDS.forEach(function(k){ refresh(k); }); }
+
+function schedulePolling(){
+  var busy = false;
+  KINDS.forEach(function(k){
+    if(store[k].entries.some(function(e){ return e.status==="pending" || e.status==="processing"; })) busy = true;
+  });
+  if(pollTimer){ clearTimeout(pollTimer); pollTimer = null; }
+  if(busy){ pollTimer = setTimeout(refreshAll, 20000); }
+}
+
+var CNT_ID = { yt:"cntYt", news:"cntNews", mail:"cntMail" };
+function updateCounts(){
+  KINDS.forEach(function(k){
+    var el = $(CNT_ID[k]);
+    var n = store[k].entries.length;
+    el.textContent = n ? String(n) : "";
+    el.style.display = n ? "" : "none";
+  });
+}
+
+/* ------------------------------ Hinzufügen ------------------------------ */
+function extractYouTube(text){
+  var re = /https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/g;
+  var found = (String(text||"").match(re) || []);
+  if(!found.length){
+    var bare = String(text||"").trim();
+    if(/^[A-Za-z0-9_-]{11}$/.test(bare)) found = ["https://www.youtube.com/watch?v="+bare];
+  }
+  return dedupe(found);
+}
+function extractUrls(text){
+  var re = /https?:\/\/[^\s<>"']+/g;
+  var found = (String(text||"").match(re) || []).map(function(u){ return u.replace(/[.,;:)\]]+$/,""); });
+  return dedupe(found);
+}
+function dedupe(arr){ var seen={}, out=[]; arr.forEach(function(u){ if(!seen[u]){ seen[u]=1; out.push(u); } }); return out; }
+
+/* Sortiert beliebigen eingefügten Text automatisch: YouTube-Links -> 🎬, alle anderen -> 📰.
+   Dadurch ist es egal, in welchem Bereich du etwas einfügst oder hineinteilst. */
+function sortLinks(text){
+  var yt = extractYouTube(text);
+  var isYt = {};
+  yt.forEach(function(u){ isYt[u] = 1; });
+  var rest = extractUrls(text).filter(function(u){
+    return !isYt[u] && !/^https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(u);
+  });
+  return { yt: yt, news: rest, total: yt.length + rest.length };
+}
+
+/* Fügt gemischte Links hinzu und wechselt in den Bereich, in dem am meisten gelandet ist. */
+function addMixed(text){
+  var s = sortLinks(text);
+  if(!s.total){ toast("Kein Link erkannt. Bitte eine vollständige Adresse einfügen (mit https://).", "err"); return; }
+  var target = s.yt.length >= s.news.length ? "yt" : "news";
+  if(kind !== target) switchKind(target);
+  if(s.yt.length && s.news.length){
+    toast(s.yt.length+" ➜ 🎬 YouTube · "+s.news.length+" ➜ 📰 Web");
+  }
+  if(s.yt.length) addLinks("yt", s.yt);
+  if(s.news.length) addLinks("news", s.news);
+}
+
+function addLinks(k, links){
+  if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
+  var ui = KIND_UI[k];
+  if(!links.length){ toast(k==="news" ? "Kein Artikel-Link erkannt." : "Kein YouTube-Link erkannt.", "err"); return; }
+  $("addBtn").disabled = true;
+  var added = 0, dup = 0;
+  var chain = Promise.resolve();
+  links.forEach(function(link){
+    chain = chain.then(function(){
+      return apiFor(k, { action:"add", url:link }).then(function(res){
+        if(res && res.ok){ res.duplicate ? dup++ : added++; }
+        else if(res && res.error){ toast(res.error, "err"); }
+      });
+    });
+  });
+  chain.then(function(){
+    $("addBtn").disabled = false;
+    if(k === kind) $("addInput").value = "";
+    var msg;
+    if(!added && dup){
+      msg = (dup===1 ? "War schon in der Liste" : dup+" waren schon in der Liste") + " – jetzt wieder ganz oben.";
+    } else {
+      msg = added + " " + (added===1?ui.noun1:ui.nounN) + " hinzugefügt";
+      if(dup) msg += " ("+dup+" bereits vorhanden – nach oben verschoben)";
+    }
+    toast(msg, "ok");
+    refresh(k).then(function(){ setTimeout(function(){ refresh(k); }, 4000); });
+  }).catch(function(err){
+    $("addBtn").disabled = false;
+    toast(err.message || "Fehler beim Hinzufügen.", "err");
+  });
+}
+
+/* ------------------------------- Tabs ----------------------------------- */
+function updateTabsUI(){
+  var tabs = $("tabs").querySelectorAll(".tab");
+  for(var i=0;i<tabs.length;i++){ tabs[i].classList.toggle("active", tabs[i].getAttribute("data-kind")===kind); }
+  $("logo").textContent = KIND_UI[kind].logo;
+  $("addInput").placeholder = KIND_UI[kind].placeholder;
+  $("addHint").textContent = KIND_UI[kind].hint;
+  KINDS.forEach(function(k){ document.body.classList.toggle("kind-"+k, k===kind); });
+}
+function switchKind(k){
+  if(k===kind) return;
+  if(tts.playing) ttsStop();
+  if(selectionMode) exitSelectionMode();
+  kind = k; localStorage.setItem("active_kind", k);
+  updateTabsUI();
+  $("searchInput").value = S().search || "";
+  S().lastSig = ""; render();
+  window.scrollTo(0,0);
+  refresh(k);
+}
+$("tabs").addEventListener("click", function(ev){
+  var b = ev.target.closest(".tab"); if(!b) return;
+  switchKind(b.getAttribute("data-kind"));
+});
+
+/* ----------------------------- Karten-Events ---------------------------- */
+$("list").addEventListener("click", function(ev){
+  if(Date.now() < suppressClickUntil) return;
+  var card = ev.target.closest(".card"); if(!card) return;
+  var id = card.getAttribute("data-id");
+
+  if(selectionMode){ toggleSelect(id); return; }
+
+  if(ev.target.closest("[data-toggle]")){
+    card.classList.toggle("open");
+    if(card.classList.contains("open")) S().openCards[id] = true;
+    else {
+      delete S().openCards[id];
+      if(tts.playing && String(tts.id)===String(id)) ttsStop(); // zugeklappt = Vorlesen beenden
+    }
+    return;
+  }
+  var act = ev.target.getAttribute && ev.target.getAttribute("data-act");
+  if(act === "tts-full"){ ttsStart(id, "full"); return; }
+  if(act === "tts-short"){ ttsStart(id, "short"); return; }
+  if(act === "tts-toggle"){ ttsToggle(); return; }
+  if(act === "tts-stop"){ ttsStop(); return; }
+  if(act === "delete"){
+    if(!confirm("Diesen Eintrag wirklich löschen?")) return;
+    api({ action:"delete", id:id }).then(function(){ toast("Gelöscht.", "ok"); refresh(); });
+  } else if(act === "retry"){
+    api({ action:"retry", id:id }).then(function(){ toast("Wird erneut versucht …", "ok"); refresh(); });
+  } else if(act === "ask"){
+    submitQuestion(id, card.querySelector(".qain"));
+  } else if(act === "copy"){
+    var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+    var current = S().viewLang[id] || (e && e.language) || "Deutsch";
+    var text = (e && (current===(e.language||"Deutsch") ? e.summary : (e.translations||{})[current])) || (e && e.summary) || "";
+    var full = (e? (e.title+"\n"+e.url+"\n\n") : "") + text;
+    (navigator.clipboard ? navigator.clipboard.writeText(full) : Promise.reject())
+      .then(function(){ toast("In Zwischenablage kopiert.", "ok"); })
+      .catch(function(){ toast("Kopieren nicht möglich.", "err"); });
+  }
+});
+
+$("list").addEventListener("input", function(ev){
+  if(ev.target.classList && ev.target.classList.contains("qain")){
+    var c = ev.target.closest(".card"); if(c) S().qaDraft[c.getAttribute("data-id")] = ev.target.value;
+  }
+});
+$("list").addEventListener("keydown", function(ev){
+  if(ev.key==="Enter" && ev.target.classList && ev.target.classList.contains("qain")){
+    ev.preventDefault();
+    var c = ev.target.closest(".card"); if(c) submitQuestion(c.getAttribute("data-id"), ev.target);
+  }
+});
+
+/* ---- Fragen zum Inhalt ---- */
+function submitQuestion(id, input){
+  var q = (input && input.value || "").trim();
+  if(!q){ toast("Bitte zuerst eine Frage eingeben.", "err"); return; }
+  var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e || e.status !== "done"){ toast("Erst wenn die Zusammenfassung fertig ist.", "err"); return; }
+  if(input) input.disabled = true;
+  toast("Frage wird beantwortet …");
+  api({ action:"ask", id:id, q:q }).then(function(res){
+    if(res && res.ok){
+      e.qa = res.qa || (e.qa||[]).concat([{ q:q, a:res.answer }]);
+      S().qaDraft[id] = "";
+      localStorage.setItem(S().cacheKey, JSON.stringify(S().entries));
+      S().lastSig = ""; render(); reopen(id);
+      toast("Antwort da.", "ok");
+    } else { if(input) input.disabled = false; toast((res&&res.error)||"Frage fehlgeschlagen.", "err"); }
+  }).catch(function(err){ if(input) input.disabled = false; toast(err.message, "err"); });
+}
+
+/* ---- Wischen zum Löschen + Lange drücken zum Auswählen ---- */
+$("list").addEventListener("touchstart", onTouchStart, { passive: true });
+$("list").addEventListener("touchmove", onTouchMove, { passive: false });
+$("list").addEventListener("touchend", onTouchEnd);
+$("list").addEventListener("touchcancel", onTouchEnd);
+
+function onTouchStart(ev){
+  if(selectionMode || ev.touches.length > 1) return;
+  var head = ev.target.closest(".head"); if(!head) return;
+  var card = head.closest(".card");
+  var t = ev.touches[0];
+  touch = { id:card.getAttribute("data-id"), card:card, swipe:card.querySelector(".swipe"),
+    x:t.clientX, y:t.clientY, dx:0, moved:false, swiping:false,
+    longTimer:setTimeout(function(){ suppressClickUntil = Date.now()+600; startSelection(card.getAttribute("data-id")); touch = null; }, 500) };
+}
+function onTouchMove(ev){
+  if(!touch) return;
+  var t = ev.touches[0];
+  touch.dx = t.clientX - touch.x;
+  var dy = t.clientY - touch.y;
+  if(!touch.moved && (Math.abs(touch.dx) > 8 || Math.abs(dy) > 8)){
+    touch.moved = true; clearTimeout(touch.longTimer);
+    if(Math.abs(touch.dx) > Math.abs(dy) + 4) touch.swiping = true;
+  }
+  if(touch.swiping){
+    ev.preventDefault();
+    var tx = Math.max(-touch.card.offsetWidth, Math.min(0, touch.dx));
+    touch.swipe.style.transform = "translateX(" + tx + "px)";
+  }
+}
+function onTouchEnd(){
+  if(!touch) return;
+  clearTimeout(touch.longTimer);
+  var tc = touch; touch = null;
+  if(!tc.swiping) return;
+  suppressClickUntil = Date.now() + 400;
+  var w = tc.card.offsetWidth;
+  tc.swipe.style.transition = "transform .2s";
+  if(-tc.dx > w * 0.45){
+    tc.swipe.style.transform = "translateX(-" + w + "px)";
+    api({ action:"delete", id:tc.id }).then(function(){ toast("Gelöscht.", "ok"); refresh(); })
+      .catch(function(err){ toast(err.message, "err"); tc.swipe.style.transform = ""; });
+  } else {
+    tc.swipe.style.transform = "";
+  }
+  setTimeout(function(){ if(tc.swipe) tc.swipe.style.transition = ""; }, 220);
+}
+
+/* ---- Mehrfachauswahl ---- */
+function startSelection(id){
+  if(navigator.vibrate){ try{ navigator.vibrate(40); }catch(e){} }
+  selectionMode = true; document.body.classList.add("selmode");
+  S().selected = {}; S().selected[id] = true;
+  render(); updateSelBar();
+}
+function toggleSelect(id){
+  if(S().selected[id]) delete S().selected[id]; else S().selected[id] = true;
+  if(!Object.keys(S().selected).length){ exitSelectionMode(); return; }
+  render(); updateSelBar();
+}
+function exitSelectionMode(){
+  selectionMode = false; S().selected = {}; document.body.classList.remove("selmode"); render();
+}
+function updateSelBar(){ $("selCount").textContent = Object.keys(S().selected).length + " ausgewählt"; }
+$("selCancel").onclick = function(){ exitSelectionMode(); };
+$("selDelete").onclick = function(){
+  var ids = Object.keys(S().selected);
+  if(!ids.length) return;
+  var ui = KIND_UI[kind];
+  if(!confirm(ids.length + " " + (ids.length===1?ui.noun1:ui.nounN) + " wirklich löschen?")) return;
+  var chain = Promise.resolve();
+  ids.forEach(function(id){ chain = chain.then(function(){ return api({ action:"delete", id:id }).catch(function(){}); }); });
+  chain.then(function(){ toast(ids.length + " gelöscht.", "ok"); exitSelectionMode(); refresh(); });
+};
+
+/* ---- Zurück-Taste (Android): Artikel zuklappen / Auswahl beenden / doppelt zum Verlassen ---- */
+function hasOpenCards(){ return Object.keys(S().openCards).length > 0; }
+function initHistory(){
+  try{ if("scrollRestoration" in history) history.scrollRestoration = "manual"; }catch(e){}
+  try{ history.replaceState({ t:"base" }, "", location.pathname); history.pushState(GUARD, ""); }catch(e){}
+  window.addEventListener("popstate", onPopState);
+}
+function safePush(){ try{ history.pushState(GUARD, ""); }catch(e){} }
+function onPopState(){
+  if(selectionMode){ exitSelectionMode(); safePush(); return; }
+  if(hasOpenCards()){
+    var ids = Object.keys(S().openCards);
+    var lastId = ids[ids.length - 1];
+    S().openCards = {}; render();
+    var c = document.querySelector('.card[data-id="'+CSS.escape(String(lastId))+'"]');
+    if(c) c.scrollIntoView({ block:"center" });
+    safePush(); return;
+  }
+  if(S().search){ S().search = ""; $("searchInput").value = ""; render(); safePush(); return; }
+  if(exitArmed){ history.back(); return; }
+  exitArmed = true; safePush();
+  toast("Nochmal zurück, um die App zu verlassen");
+  setTimeout(function(){ exitArmed = false; }, 2000);
+}
+
+$("list").addEventListener("change", function(ev){
+  if(ev.target.getAttribute("data-act") === "tts-rate"){
+    ttsRate = parseFloat(ev.target.value) || 1;
+    localStorage.setItem("tts_rate", String(ttsRate));
+    if(tts.playing){ // Tempo sofort übernehmen: ab der aktuellen Stelle neu starten
+      var id = tts.id, mode = tts.mode, pos = tts.i;
+      try{ window.speechSynthesis.cancel(); }catch(e){}
+      tts.i = pos; tts.paused = false;
+      ttsSpeakNext();
+    }
+    return;
+  }
+  if(ev.target.getAttribute("data-act") !== "translate") return;
+  var card = ev.target.closest(".card");
+  var id = card.getAttribute("data-id");
+  var lang = ev.target.value;
+  if(!lang) return;
+  var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e) return;
+  if(lang === (e.language||"Deutsch") || (e.translations||{})[lang]){
+    S().viewLang[id] = lang; render(); reopen(id); return;
+  }
+  ev.target.disabled = true;
+  toast("Übersetze nach "+lang+" …");
+  api({ action:"translate", id:id, lang:lang }).then(function(res){
+    if(res && res.ok){
+      e.translations = e.translations || {};
+      e.translations[lang] = res.text;
+      localStorage.setItem(S().cacheKey, JSON.stringify(S().entries));
+      S().viewLang[id] = lang;
+      render(); reopen(id);
+      toast("Übersetzt.", "ok");
+    } else { toast((res&&res.error)||"Übersetzung fehlgeschlagen.", "err"); }
+  }).catch(function(err){ toast(err.message, "err"); });
+});
+
+function reopen(id){
+  S().openCards[id] = true;
+  var c = document.querySelector('.card[data-id="'+CSS.escape(String(id))+'"]');
+  if(c) c.classList.add("open");
+}
+
+/* ----------------------------- Einstellungen ---------------------------- */
+function openSettings(){
+  $("cfgEndpoint").value = cfg.endpoint;
+  $("cfgSecret").value = cfg.secret;
+  $("cfgLang").value = cfg.lang;
+  $("testLine").textContent = "";
+  $("settingsOverlay").classList.add("show");
+}
+function closeSettings(){ $("settingsOverlay").classList.remove("show"); }
+
+$("settingsBtn").onclick = openSettings;
+$("settingsOverlay").addEventListener("click", function(ev){ if(ev.target.id==="settingsOverlay") closeSettings(); });
+
+$("saveBtn").onclick = function(){
+  cfg.endpoint = $("cfgEndpoint").value.trim();
+  cfg.secret   = $("cfgSecret").value.trim();
+  cfg.lang     = $("cfgLang").value;
+  localStorage.setItem("cfg_endpoint", cfg.endpoint);
+  localStorage.setItem("cfg_secret", cfg.secret);
+  localStorage.setItem("cfg_lang", cfg.lang);
+  closeSettings();
+  updateNotice();
+  toast("Gespeichert.", "ok");
+  flushPendingShares();
+  refreshAll();
+};
+
+$("testBtn").onclick = function(){
+  var ep = $("cfgEndpoint").value.trim(), sc = $("cfgSecret").value.trim();
+  if(!ep || !sc){ $("testLine").innerHTML = '<span style="color:var(--err)">Bitte URL und Passwort eingeben.</span>'; return; }
+  var saved = { e:cfg.endpoint, s:cfg.secret };
+  cfg.endpoint = ep; cfg.secret = sc;
+  $("testLine").textContent = "Teste …";
+  api({ action:"ping" }).then(function(res){
+    if(res && res.ok){ $("testLine").innerHTML = '<span style="color:var(--ok)">✓ Verbindung erfolgreich!</span>'; }
+    else { $("testLine").innerHTML = '<span style="color:var(--err)">✗ '+esc((res&&res.error)||"Antwort ungültig")+'</span>'; cfg.endpoint=saved.e; cfg.secret=saved.s; }
+  }).catch(function(err){
+    $("testLine").innerHTML = '<span style="color:var(--err)">✗ '+esc(err.message)+'</span>';
+    cfg.endpoint=saved.e; cfg.secret=saved.s;
+  });
+};
+
+function updateNotice(){
+  var n = $("notice");
+  if(!cfg.endpoint || !cfg.secret){
+    n.innerHTML = "⚙️ Noch nicht verbunden. Tippe oben rechts auf das Zahnrad und trage Web-App-URL + Passwort ein. <a id='openCfg'>Jetzt einrichten</a>";
+    n.classList.add("show");
+    var oc = $("openCfg"); if(oc) oc.onclick = openSettings;
+  } else {
+    n.classList.remove("show");
+  }
+}
+
+/* ------------------------- Geteilte Links empfangen --------------------- */
+function handleShareTarget(){
+  var p = new URLSearchParams(location.search);
+  var raw = [p.get("url"), p.get("text"), p.get("title")].filter(Boolean).join(" ");
+  if(!raw) return;
+  history.replaceState(null, "", location.pathname);
+  var s = sortLinks(raw);
+  if(!s.total){ toast("Im geteilten Inhalt war kein Link.", "err"); return; }
+  if(!cfg.endpoint || !cfg.secret){
+    var pend = JSON.parse(localStorage.getItem("pending_shares")||"[]");
+    s.yt.forEach(function(l){ pend.push({ kind:"yt", link:l }); });
+    s.news.forEach(function(l){ pend.push({ kind:"news", link:l }); });
+    localStorage.setItem("pending_shares", JSON.stringify(pend));
+    openSettings();
+    toast("Bitte zuerst einrichten – der Link wird danach automatisch hinzugefügt.", "err");
+    return;
+  }
+  addMixed(raw);
+}
+
+function flushPendingShares(){
+  // alte Einträge (nur YouTube) migrieren
+  var old = JSON.parse(localStorage.getItem("yt_pending_shares")||"[]");
+  if(old.length){
+    localStorage.removeItem("yt_pending_shares");
+    var cur = JSON.parse(localStorage.getItem("pending_shares")||"[]");
+    old.forEach(function(l){ cur.push({ kind:"yt", link:l }); });
+    localStorage.setItem("pending_shares", JSON.stringify(cur));
+  }
+  var pend = JSON.parse(localStorage.getItem("pending_shares")||"[]");
+  if(!pend.length || !cfg.endpoint || !cfg.secret) return;
+  localStorage.removeItem("pending_shares");
+  var byKind = { yt:[], news:[] };
+  pend.forEach(function(x){ (byKind[x.kind]||byKind.yt).push(x.link); });
+  if(byKind.yt.length) addLinks("yt", byKind.yt);
+  if(byKind.news.length) addLinks("news", byKind.news);
+}
+
+/* ------------------------------- Init ----------------------------------- */
+$("addBtn").onclick = function(){
+  var v = $("addInput").value;
+  $("addInput").value = "";
+  addMixed(v);
+};
+$("refreshBtn").onclick = function(){ toast("Aktualisiere …"); refreshAll(); };
+$("scanBtn").onclick = function(){
+  if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
+  var b = $("scanBtn"); b.disabled = true;
+  toast("Sehe in Gmail nach …");
+  api({ action:"scan" }).then(function(res){
+    b.disabled = false;
+    if(res && res.ok){
+      toast(res.added ? (res.added + (res.added===1?" Mail":" Mails") + " übernommen – wird jetzt zusammengefasst.")
+                      : "Keine markierten Mails gefunden.", res.added ? "ok" : undefined);
+      refresh("mail");
+    } else { toast((res&&res.error)||"Nachsehen fehlgeschlagen.", "err"); }
+  }).catch(function(err){ b.disabled = false; toast(err.message, "err"); });
+};
+$("searchInput").addEventListener("input", function(){ S().search = this.value.trim(); render(); });
+
+(function initLangSelect(){
+  $("cfgLang").innerHTML = LANGS.map(function(l){ return '<option value="'+l+'">'+l+'</option>'; }).join("");
+})();
+
+if("serviceWorker" in navigator){
+  window.addEventListener("load", function(){ navigator.serviceWorker.register("service-worker.js").catch(function(){}); });
+}
+
+updateTabsUI();
+$("searchInput").value = S().search || "";
+render();
+updateNotice();
+handleShareTarget();
+flushPendingShares();
+initHistory();
+refreshAll();
+</script>
+</body>
+</html>

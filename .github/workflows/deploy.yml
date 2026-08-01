@@ -1,0 +1,40 @@
+# Veroeffentlicht den Ordner "web" automatisch auf GitHub Pages.
+# Laeuft bei jedem Push auf main - du musst nichts weiter tun.
+name: App veröffentlichen
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # erlaubt manuelles Starten im Reiter "Actions"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Nie zwei Veroeffentlichungen gleichzeitig
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Dateien holen
+        uses: actions/checkout@v4
+
+      - name: Pages vorbereiten
+        uses: actions/configure-pages@v5
+
+      - name: Ordner "web" hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Veröffentlichen
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,28 @@
+# ==========================================================================
+#  WICHTIG – Geheimnisse bleiben lokal!
+#  apps-script/Code.gs enthaelt deinen Gemini-Schluessel und dein Passwort.
+#  Dieses Repository wird bei GitHub Pages OEFFENTLICH veroeffentlicht, damit
+#  darf die Datei niemals hochgeladen werden.
+#  Sie liegt weiterhin auf deinem PC und wird per clasp direkt zu Google
+#  geschickt (nicht ueber GitHub).
+# ==========================================================================
+apps-script/
+
+# Backup-Archive – enthalten Kopien von Code.gs samt Schluesseln
+*.zip
+
+# clasp-Anmeldedaten (enthalten Zugriffstoken auf dein Google-Konto)
+.clasprc.json
+.clasp.json
+
+# Betriebssystem / Editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Arbeitsdateien
+node_modules/
+*.log
