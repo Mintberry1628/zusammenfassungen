@@ -1,6 +1,6 @@
 /* Service Worker – macht die App installierbar und offline-fähig.
    Bei jeder neuen App-Version die Zahl erhöhen (v2 -> v3 ...), damit Handys die Änderung laden. */
-var CACHE = "ytz-v13";
+var CACHE = "ytz-v14";
 var ASSETS = [
   "./",
   "./index.html",

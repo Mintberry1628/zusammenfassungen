@@ -487,7 +487,8 @@ function apiRaw(params){
     if(!cfg.endpoint || !cfg.secret){ reject(new Error("NO_CONFIG")); return; }
     var cb = "__cb" + Math.random().toString(36).slice(2);
     var script = document.createElement("script");
-    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server nicht erreichbar.")); }, 95000);
+    // Kürzer als früher: eine hängende Anfrage darf die Warteschlange nicht lange blockieren
+    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server nicht erreichbar.")); }, 60000);
     function cleanup(){ clearTimeout(timer); delete window[cb]; if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
     var q = Object.assign({ kind: kind }, params, { token: cfg.secret, callback: cb });
@@ -854,6 +855,7 @@ function render(){
   var entries = S().entries;
   var y = window.scrollY;
   updateCounts();
+  renderTagbar();          // immer aktualisieren, sonst bleiben Schlagworte des vorigen Bereichs stehen
   if(!entries.length){
     var EMPTY = {
       yt:   "Noch keine Videos. Teile ein YouTube-Video an diese App oder füge oben Link(s) ein.",
@@ -865,7 +867,6 @@ function render(){
     return;
   }
   var shown = sichtbareEintraege();
-  renderTagbar();
   if(!shown.length){
     var grund = S().search ? ('Keine Treffer für „'+esc(S().search)+'".')
               : (S().tagFilter ? ('Nichts unter „'+esc(S().tagFilter)+'" in diesem Zeitraum.')
@@ -1377,7 +1378,10 @@ function beaconOutbox(){
 }
 window.addEventListener("pagehide", beaconOutbox);
 document.addEventListener("visibilitychange", function(){
-  if(document.visibilityState === "hidden") beaconOutbox(); else processOutbox();
+  if(document.visibilityState === "hidden"){ beaconOutbox(); return; }
+  // Zurück im Vordergrund: Android friert Anfragen im Hintergrund ein – daher neu laden
+  processOutbox();
+  refreshActive();
 });
 
 /* ------------------- Gelesen-Status, Filter, Server-Suche ---------------- */
