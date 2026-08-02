@@ -389,6 +389,7 @@
       </label>
       <div class="help">Meldet sich, solange die App noch im Hintergrund läuft. Wenn du sie ganz
         schließt (wegwischst), stoppt Android sie – dann kommt keine Meldung.</div>
+      <div class="help" id="notifyHelp" style="display:none"></div>
     </div>
     <div class="testline" id="testLine"></div>
     <div class="btnrow">
@@ -1456,12 +1457,63 @@ function updateToolbar(){
 var letzterStatus = {};
 function benachrichtigungenAktiv(){ return localStorage.getItem("notify") === "1"; }
 
+/* Zeigt bei Bedarf die Anleitung zum Freischalten (Chrome merkt sich eine Ablehnung dauerhaft). */
+function zeigeNotifyHilfe(art){
+  var h = $("notifyHelp");
+  if(!h) return;
+  if(!art){ h.style.display = "none"; h.innerHTML = ""; return; }
+  var alsApp = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+  if(art === "blockiert"){
+    h.innerHTML = '<b style="color:var(--warn)">⚠️ Benachrichtigungen sind blockiert.</b> ' +
+      'Chrome merkt sich eine einmalige Ablehnung – ein erneutes Fragen ist deshalb nicht möglich. ' +
+      'So schaltest du sie frei:' +
+      (alsApp
+        ? '<br>• <b>Als App installiert:</b> Android-<b>Einstellungen</b> → <b>Apps</b> → ' +
+          '<b>Zusammenfassungen</b> → <b>Benachrichtigungen</b> → einschalten.' +
+          '<br>• Falls das nicht reicht: In Chrome <b>⋮</b> → <b>Einstellungen</b> → ' +
+          '<b>Website-Einstellungen</b> → <b>Benachrichtigungen</b> → <b>mintberry1628.github.io</b> → <b>Zulassen</b>.'
+        : '<br>• Tippe links neben der Adresse auf das <b>Schloss-/Einstellungssymbol</b> → ' +
+          '<b>Berechtigungen</b> → <b>Benachrichtigungen</b> → <b>Zulassen</b>.' +
+          '<br>• Oder: Chrome <b>⋮</b> → <b>Einstellungen</b> → <b>Website-Einstellungen</b> → ' +
+          '<b>Benachrichtigungen</b> → <b>mintberry1628.github.io</b> → <b>Zulassen</b>.') +
+      '<br>Danach hier den Haken erneut setzen.';
+  } else if(art === "empfehlung"){
+    h.innerHTML = '<b>Tipp:</b> Am zuverlässigsten funktioniert das, wenn du die Seite ' +
+      'über Chrome <b>⋮ → App installieren</b> auf den Startbildschirm legst.';
+  }
+  h.style.display = "block";
+}
+
 function fragenNachErlaubnis(){
-  if(!("Notification" in window)){ toast("Dein Browser kann keine Benachrichtigungen.", "err"); return; }
+  if(!("Notification" in window)){
+    toast("Dein Browser kann keine Benachrichtigungen.", "err");
+    $("cfgNotify").checked = false; return;
+  }
+  // Bereits blockiert? Dann wuerde die Abfrage sofort wieder "denied" liefern – lieber erklaeren.
+  if(Notification.permission === "denied"){
+    localStorage.setItem("notify","0");
+    $("cfgNotify").checked = false;
+    zeigeNotifyHilfe("blockiert");
+    return;
+  }
+  if(Notification.permission === "granted"){
+    localStorage.setItem("notify","1");
+    zeigeNotifyHilfe(null);
+    toast("Benachrichtigungen an ✓","ok");
+    return;
+  }
   Notification.requestPermission().then(function(p){
-    if(p === "granted"){ localStorage.setItem("notify","1"); toast("Benachrichtigungen an ✓","ok"); }
-    else { localStorage.setItem("notify","0"); toast("Benachrichtigungen wurden abgelehnt.","err"); }
-    if($("cfgNotify")) $("cfgNotify").checked = benachrichtigungenAktiv();
+    if(p === "granted"){
+      localStorage.setItem("notify","1"); zeigeNotifyHilfe(null);
+      toast("Benachrichtigungen an ✓","ok");
+      // Kurze Probe, damit du siehst, wie es aussieht
+      try{ zeigeFertigMeldung({ id:"test", title:"Benachrichtigungen sind aktiv",
+        summary:"So meldet sich die App, sobald eine Zusammenfassung fertig ist." }); }catch(e){}
+    } else {
+      localStorage.setItem("notify","0");
+      $("cfgNotify").checked = false;
+      zeigeNotifyHilfe("blockiert");
+    }
   });
 }
 
@@ -1751,6 +1803,12 @@ function openSettings(){
   $("cfgSecret").value = cfg.secret;
   $("cfgLang").value = cfg.lang;
   $("cfgNotify").checked = benachrichtigungenAktiv() && ("Notification" in window) && Notification.permission === "granted";
+  // Zustand erklären: blockiert -> Anleitung, sonst ggf. Installations-Tipp
+  if(!("Notification" in window)) zeigeNotifyHilfe(null);
+  else if(Notification.permission === "denied") zeigeNotifyHilfe("blockiert");
+  else if(Notification.permission !== "granted" &&
+          !(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)) zeigeNotifyHilfe("empfehlung");
+  else zeigeNotifyHilfe(null);
   $("testLine").textContent = "";
   $("settingsOverlay").classList.add("show");
 }
