@@ -1192,6 +1192,9 @@ function apiFor(k, params){
   return api(Object.assign({ kind:k }, params));
 }
 
+/* Beim Start nur den sichtbaren Bereich laden – die anderen kommen beim Umschalten.
+   So steht die App sofort bereit und Eingaben müssen nicht hinter Ladevorgängen warten. */
+function refreshActive(){ return refresh(kind); }
 function refreshAll(){ KINDS.forEach(function(k){ refresh(k); }); }
 
 function schedulePolling(){
@@ -1200,7 +1203,16 @@ function schedulePolling(){
     if(store[k].entries.some(function(e){ return e.status==="pending" || e.status==="processing"; })) busy = true;
   });
   if(pollTimer){ clearTimeout(pollTimer); pollTimer = null; }
-  if(busy){ pollTimer = setTimeout(refreshAll, 20000); }
+  if(busy){
+    pollTimer = setTimeout(function(){
+      // aktiven Bereich immer, andere nur wenn dort etwas in Arbeit ist
+      refresh(kind);
+      KINDS.forEach(function(k){
+        if(k === kind) return;
+        if(store[k].entries.some(function(e){ return e.status==="pending" || e.status==="processing"; })) refresh(k);
+      });
+    }, 20000);
+  }
 }
 
 var CNT_ID = { yt:"cntYt", news:"cntNews", mail:"cntMail" };
@@ -1751,7 +1763,7 @@ $("saveBtn").onclick = function(){
   updateNotice();
   toast("Gespeichert.", "ok");
   flushPendingShares();
-  refreshAll();
+  refreshActive();
 };
 
 $("testBtn").onclick = function(){
@@ -1759,11 +1771,21 @@ $("testBtn").onclick = function(){
   if(!ep || !sc){ $("testLine").innerHTML = '<span style="color:var(--err)">Bitte URL und Passwort eingeben.</span>'; return; }
   var saved = { e:cfg.endpoint, s:cfg.secret };
   cfg.endpoint = ep; cfg.secret = sc;
-  $("testLine").textContent = "Teste …";
+  // Laufende Anzeige – der erste Aufruf weckt Googles Server und kann dauern
+  var t0 = Date.now();
+  $("testBtn").disabled = true;
+  $("testLine").innerHTML = '<span style="color:var(--muted)">Teste … <b id="testSek">0 s</b> – beim ersten Mal kann das bis zu einer Minute dauern.</span>';
+  var ticker = setInterval(function(){
+    var el = $("testSek");
+    if(el) el.textContent = Math.round((Date.now()-t0)/1000) + " s";
+  }, 1000);
+  var fertig = function(){ clearInterval(ticker); $("testBtn").disabled = false; };
   api({ action:"ping" }).then(function(res){
+    fertig();
     if(res && res.ok){ $("testLine").innerHTML = '<span style="color:var(--ok)">✓ Verbindung erfolgreich!</span>'; }
     else { $("testLine").innerHTML = '<span style="color:var(--err)">✗ '+esc((res&&res.error)||"Antwort ungültig")+'</span>'; cfg.endpoint=saved.e; cfg.secret=saved.s; }
   }).catch(function(err){
+    fertig();
     $("testLine").innerHTML = '<span style="color:var(--err)">✗ '+esc(err.message)+'</span>';
     cfg.endpoint=saved.e; cfg.secret=saved.s;
   });
@@ -1867,7 +1889,7 @@ updateNotice();
 handleShareTarget();
 flushPendingShares();
 initHistory();
-refreshAll();
+refreshActive();   // nur der sichtbare Bereich – die anderen beim Umschalten
 processOutbox();   // beim letzten Mal nicht abgeschickte Links nachreichen
 </script>
 </body>
