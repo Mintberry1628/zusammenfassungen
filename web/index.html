@@ -540,7 +540,9 @@ var LANG_CODE = { "Deutsch":"de-DE", "Englisch":"en-US", "Französisch":"fr-FR",
   "Japanisch":"ja-JP", "Koreanisch":"ko-KR" };
 
 var TTS_OK = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
-var tts = { id:null, mode:null, chunks:[], i:0, playing:false, paused:false, lang:"de-DE" };
+/* gen = laufende Nummer der Ausgabe. Jede abgebrochene Ausgabe erhöht sie, wodurch verspätete
+   Rückmeldungen der alten Ausgabe eindeutig erkannt und ignoriert werden (kein Zeitfenster nötig). */
+var tts = { id:null, mode:null, chunks:[], i:0, playing:false, paused:false, lang:"de-DE", gen:0 };
 var ttsRate = parseFloat(localStorage.getItem("tts_rate") || "1") || 1;
 
 /* Einleitung für "TL;DR" je Sprache (sonst würde die Abkürzung buchstabiert). */
@@ -618,7 +620,7 @@ function pickVoice(code){
 
 function ttsStop(){
   tts.id = null; tts.mode = null; tts.chunks = []; tts.i = 0;
-  tts.playing = false; tts.paused = false; tts.onEnd = null;
+  tts.playing = false; tts.paused = false; tts.onEnd = null; tts.gen++;
   if(TTS_OK){ try{ window.speechSynthesis.cancel(); }catch(e){} }
   updateTtsBars();
 }
@@ -637,14 +639,15 @@ function ttsSpeakNext(){
   u.rate = ttsRate;
   var v = pickVoice(tts.lang);
   if(v) u.voice = v;
+  var meineGen = tts.gen;                       // gehört diese Rückmeldung noch zur aktuellen Ausgabe?
   u.onend = function(){
-    if(!tts.playing) return;
+    if(meineGen !== tts.gen || !tts.playing || tts.paused) return;
     tts.i++;
     updateTtsBars();
     ttsSpeakNext();
   };
   u.onerror = function(ev){
-    if(!tts.playing) return;
+    if(meineGen !== tts.gen || !tts.playing || tts.paused) return;
     if(ev && ev.error === "interrupted") return;   // durch Stopp/Neustart ausgelöst
     tts.i++;
     if(tts.i < tts.chunks.length) ttsSpeakNext(); else ttsStop();
@@ -653,9 +656,11 @@ function ttsSpeakNext(){
 }
 
 function ttsStart(id, mode, beiEnde){
-  if(!TTS_OK){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
+  // Bricht etwas ab, im Podcast-Modus trotzdem weiterreichen – sonst bliebe er stehen
+  var abbruch = function(text){ if(text) toast(text, "err"); if(beiEnde) beiEnde(); };
+  if(!TTS_OK){ abbruch("Dein Browser kann leider nicht vorlesen."); return; }
   var e = S().entries.find(function(x){ return String(x.id)===String(id); });
-  if(!e || e.status !== "done"){ toast("Erst wenn die Zusammenfassung fertig ist.", "err"); return; }
+  if(!e || e.status !== "done"){ abbruch("Erst wenn die Zusammenfassung fertig ist."); return; }
   var current = S().viewLang[id] || e.language || "Deutsch";
   var md = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
   var raw = (mode === "short") ? shortPart(md) : md;
@@ -668,7 +673,8 @@ function ttsStart(id, mode, beiEnde){
     });
   }
   var chunks = ttsChunks(text);
-  if(!chunks.length){ toast("Nichts zum Vorlesen gefunden.", "err"); return; }
+  if(!chunks.length){ abbruch("Nichts zum Vorlesen gefunden."); return; }
+  tts.gen++;                                   // alte Rückmeldungen entwerten
   try{ window.speechSynthesis.cancel(); }catch(err){}
   tts.id = id; tts.mode = mode; tts.chunks = chunks; tts.i = 0;
   tts.playing = true; tts.paused = false;
@@ -678,13 +684,26 @@ function ttsStart(id, mode, beiEnde){
   ttsSpeakNext();
 }
 
+/* Pause selbst gebaut: Chrome auf Android ignoriert pause()/resume() der Sprachausgabe.
+   Wir brechen stattdessen ab und setzen beim Weiterspielen am selben Häppchen wieder an. */
 function ttsToggle(){
   if(!tts.playing) return;
-  try{
-    if(tts.paused){ window.speechSynthesis.resume(); tts.paused = false; }
-    else { window.speechSynthesis.pause(); tts.paused = true; }
-  }catch(e){}
+  if(tts.paused){
+    tts.paused = false;
+    ttsSpeakNext();                       // ab dem angefangenen Satz erneut
+  } else {
+    tts.paused = true;
+    ttsAbbrechenOhneWeiter();
+  }
   updateTtsBars();
+  if(podMode) podPlayIcon();
+}
+
+/* Laufende Ausgabe stoppen, ohne dass dadurch zum nächsten Häppchen gesprungen wird.
+   Das Hochzählen von gen entwertet alle Rückmeldungen der abgebrochenen Ausgabe. */
+function ttsAbbrechenOhneWeiter(){
+  tts.gen++;
+  try{ window.speechSynthesis.cancel(); }catch(e){}
 }
 
 /* ---------------------------- Podcast-Modus ----------------------------- */
@@ -835,7 +854,7 @@ function signature(arr){
     return e.id+":"+e.status+":"+((e.title||"").length)+":"+((e.summary||"").length)+":"+(e.durationText||"")+
       ":"+(e.viewCount||"")+":"+(e.likeCount||"")+":"+(e.commentCount||"")+":"+(e.publishedAt||"")+
       ":"+(e.source||"")+":"+(e.author||"")+":"+((e.image||"").length)+":"+((e.qa||[]).length)+
-      ":"+((e.attachments||[]).length);
+      ":"+((e.attachments||[]).length)+":"+(e.read?1:0)+":"+((e.tags||[]).join("/"));
   }).join("|");
 }
 
@@ -1552,7 +1571,8 @@ function updateTabsUI(){
 }
 function switchKind(k){
   if(k===kind) return;
-  if(tts.playing) ttsStop();
+  if(podMode) podStop();          // sonst bliebe die Podcast-Leiste ohne Inhalt stehen
+  else if(tts.playing) ttsStop();
   if(selectionMode) exitSelectionMode();
   kind = k; localStorage.setItem("active_kind", k);
   updateTabsUI();
@@ -1759,11 +1779,9 @@ $("list").addEventListener("change", function(ev){
   if(ev.target.getAttribute("data-act") === "tts-rate"){
     ttsRate = parseFloat(ev.target.value) || 1;
     localStorage.setItem("tts_rate", String(ttsRate));
-    if(tts.playing){ // Tempo sofort übernehmen: ab der aktuellen Stelle neu starten
-      var id = tts.id, mode = tts.mode, pos = tts.i;
-      try{ window.speechSynthesis.cancel(); }catch(e){}
-      tts.i = pos; tts.paused = false;
-      ttsSpeakNext();
+    if(tts.playing && !tts.paused){ // Tempo sofort übernehmen: an derselben Stelle neu ansetzen
+      ttsAbbrechenOhneWeiter();
+      ttsSpeakNext();                 // gleiche Stelle, neues Tempo
     }
     return;
   }
