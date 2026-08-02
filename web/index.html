@@ -233,6 +233,49 @@
     border-radius:10px; padding:10px 12px; font-size:14px; font-family:inherit; min-width:0}
   .qain:focus{outline:2px solid var(--accent2)}
 
+  /* Filter- und Werkzeugleiste unter der Suche */
+  .toolbar{display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-bottom:12px}
+  .seg{display:inline-flex; background:var(--card2); border:1px solid var(--line); border-radius:11px; overflow:hidden}
+  .seg button{border:none; background:transparent; color:var(--muted); font-size:12.5px; font-weight:600;
+    padding:7px 11px; cursor:pointer}
+  .seg button.on{background:var(--accent); color:#fff}
+  .toolbar select{border:1px solid var(--line); background:var(--card2); color:var(--text);
+    border-radius:11px; padding:7px 8px; font-size:12.5px; font-family:inherit}
+  .toolbar .spacer{flex:1}
+  .playall{border:1px solid var(--line); background:var(--card2); color:var(--text); border-radius:11px;
+    padding:7px 11px; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap}
+  .playall.on{background:var(--accent); color:#fff; border-color:transparent}
+
+  /* Schlagwort-Leiste (waagerecht scrollbar) */
+  .tagbar{display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; margin-bottom:10px; scrollbar-width:none}
+  .tagbar::-webkit-scrollbar{display:none}
+  .tagchip{flex:0 0 auto; border:1px solid var(--line); background:var(--card2); color:var(--muted);
+    border-radius:20px; padding:5px 11px; font-size:12.5px; cursor:pointer; white-space:nowrap}
+  .tagchip.on{background:var(--accent); color:#fff; border-color:transparent}
+
+  /* Schlagworte auf der Karte */
+  .cardtags{display:flex; gap:5px; flex-wrap:wrap; margin-top:5px}
+  .cardtag{font-size:11px; background:var(--card2); border:1px solid var(--line); color:var(--muted);
+    border-radius:20px; padding:1px 8px}
+
+  /* Gelesen-Kennzeichnung */
+  .card.gelesen .meta .title{color:var(--muted); font-weight:550}
+  .card.gelesen .thumbwrap{opacity:.55}
+  .readmark{position:absolute; top:8px; right:8px; z-index:2; background:var(--ok); color:#fff;
+    width:20px; height:20px; border-radius:50%; font-size:12px; line-height:20px; text-align:center}
+
+  /* Podcast-Leiste unten */
+  .podbar{position:fixed; left:0; right:0; bottom:0; z-index:55; background:var(--bg2);
+    border-top:1px solid var(--line); display:none; align-items:center; gap:9px;
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom)); box-shadow:0 -4px 20px rgba(0,0,0,.3)}
+  body.podmode .podbar{display:flex}
+  body.podmode main{padding-bottom:80px}
+  .podbar .podtitle{flex:1; min-width:0; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .podbar .podtitle b{display:block; font-size:11px; color:var(--muted); font-weight:600}
+  .podbtn{border:1px solid var(--line); background:var(--card2); color:var(--text); border-radius:10px;
+    width:38px; height:38px; font-size:15px; cursor:pointer; flex:0 0 auto}
+  .podbtn.primary{background:var(--accent); color:#fff; border-color:transparent}
+
   /* Suchleiste */
   .searchbar{margin-bottom:14px}
   .searchbar input{
@@ -289,6 +332,30 @@
     <input id="searchInput" type="search" placeholder="🔍 Suchen: Titel, Quelle, Inhalt …" autocomplete="off">
   </div>
 
+  <div class="toolbar">
+    <div class="seg" id="segRead">
+      <button data-read="alle">Alle</button>
+      <button data-read="offen">Offen</button>
+      <button data-read="gelesen">Gelesen</button>
+    </div>
+    <select id="sortSel" title="Sortierung">
+      <option value="neu">Neueste zuerst</option>
+      <option value="alt">Älteste zuerst</option>
+      <option value="lang">Längste zuerst</option>
+      <option value="titel">Titel A–Z</option>
+    </select>
+    <select id="zeitSel" title="Zeitraum">
+      <option value="0">Ganzer Zeitraum</option>
+      <option value="7">Letzte 7 Tage</option>
+      <option value="30">Letzte 30 Tage</option>
+      <option value="90">Letzte 3 Monate</option>
+    </select>
+    <span class="spacer"></span>
+    <button class="playall" id="playAllBtn">▶️ Alle vorlesen</button>
+  </div>
+
+  <div class="tagbar" id="tagbar"></div>
+
   <div id="list"></div>
 </main>
 
@@ -312,6 +379,14 @@
       <select id="cfgLang"></select>
       <div class="help">Pro Eintrag kannst du später jederzeit umschalten/übersetzen.</div>
     </div>
+    <div class="field">
+      <label style="display:flex; align-items:center; gap:9px; font-weight:600">
+        <input type="checkbox" id="cfgNotify" style="width:auto; margin:0">
+        Benachrichtigen, wenn eine Zusammenfassung fertig ist
+      </label>
+      <div class="help">Meldet sich, solange die App noch im Hintergrund läuft. Wenn du sie ganz
+        schließt (wegwischst), stoppt Android sie – dann kommt keine Meldung.</div>
+    </div>
     <div class="testline" id="testLine"></div>
     <div class="btnrow">
       <button class="btn secondary" id="testBtn">Verbindung testen</button>
@@ -321,6 +396,15 @@
 </div>
 
 <!-- Auswahl-Werkzeugleiste (Mehrfachauswahl) -->
+<!-- Podcast-Leiste: liest mehrere Einträge nacheinander vor -->
+<div class="podbar" id="podbar">
+  <button class="podbtn" id="podPrev" title="Vorheriger">⏮</button>
+  <button class="podbtn primary" id="podPlay" title="Pause/Weiter">⏸️</button>
+  <button class="podbtn" id="podNext" title="Nächster">⏭</button>
+  <div class="podtitle"><b id="podCount"></b><span id="podTitle"></span></div>
+  <button class="podbtn" id="podStop" title="Beenden">✕</button>
+</div>
+
 <div class="selbar" id="selbar">
   <button class="iconbtn" id="selCancel" title="Abbrechen">✕</button>
   <span class="cnt" id="selCount">0 ausgewählt</span>
@@ -345,8 +429,11 @@ var cfg = {
 /* Zwei getrennte Datensätze (YouTube / News), jeder mit eigenem UI-Zustand. */
 function mkState(cacheKey){
   return { entries: JSON.parse(localStorage.getItem(cacheKey)||"[]"),
-    viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey };
+    viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey,
+    readFilter:"alle", tagFilter:"", serverIds:null };
 }
+var sortMode = localStorage.getItem("sortMode") || "neu";
+var zeitFilter = parseInt(localStorage.getItem("zeitFilter")||"0", 10) || 0;
 var KINDS = ["yt","news","mail"];
 var store = { yt: mkState("yt_cache"), news: mkState("news_cache"), mail: mkState("mail_cache") };
 var kind = (KINDS.indexOf(localStorage.getItem("active_kind")) >= 0)
@@ -526,14 +613,18 @@ function pickVoice(code){
 
 function ttsStop(){
   tts.id = null; tts.mode = null; tts.chunks = []; tts.i = 0;
-  tts.playing = false; tts.paused = false;
+  tts.playing = false; tts.paused = false; tts.onEnd = null;
   if(TTS_OK){ try{ window.speechSynthesis.cancel(); }catch(e){} }
   updateTtsBars();
 }
 
 function ttsSpeakNext(){
   if(!tts.playing || tts.i >= tts.chunks.length){
-    if(tts.i >= tts.chunks.length && tts.playing) ttsStop();
+    if(tts.i >= tts.chunks.length && tts.playing){
+      var weiter = tts.onEnd;      // im Podcast-Modus: automatisch zum nächsten Beitrag
+      ttsStop();
+      if(weiter) weiter();
+    }
     return;
   }
   var u = new SpeechSynthesisUtterance(tts.chunks[tts.i]);
@@ -556,7 +647,7 @@ function ttsSpeakNext(){
   try{ window.speechSynthesis.speak(u); }catch(e){ ttsStop(); }
 }
 
-function ttsStart(id, mode){
+function ttsStart(id, mode, beiEnde){
   if(!TTS_OK){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
   var e = S().entries.find(function(x){ return String(x.id)===String(id); });
   if(!e || e.status !== "done"){ toast("Erst wenn die Zusammenfassung fertig ist.", "err"); return; }
@@ -576,6 +667,7 @@ function ttsStart(id, mode){
   try{ window.speechSynthesis.cancel(); }catch(err){}
   tts.id = id; tts.mode = mode; tts.chunks = chunks; tts.i = 0;
   tts.playing = true; tts.paused = false;
+  tts.onEnd = beiEnde || null;
   tts.lang = LANG_CODE[current] || "de-DE";
   updateTtsBars();
   ttsSpeakNext();
@@ -589,6 +681,103 @@ function ttsToggle(){
   }catch(e){}
   updateTtsBars();
 }
+
+/* ---------------------------- Podcast-Modus ----------------------------- */
+/* Liest alle gerade sichtbaren Einträge nacheinander vor – ideal fürs Auto.
+   Ein stummer Ton hält die Medien-Sitzung offen, damit die Kopfhörer-/Sperrbildschirm-
+   Tasten (Play/Pause/Weiter) funktionieren. */
+var podMode = false, podListe = [], podIndex = 0, podStumm = null;
+
+function podStart(){
+  if(!TTS_OK){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
+  var liste = sichtbareEintraege().filter(function(e){ return e.status === "done"; });
+  if(!liste.length){ toast("Nichts zum Vorlesen in der aktuellen Ansicht.", "err"); return; }
+  podListe = liste.map(function(e){ return e.id; });
+  podIndex = 0; podMode = true;
+  document.body.classList.add("podmode");
+  updateToolbar();
+  starteStummenTon();
+  podSpiele();
+}
+
+function podStop(){
+  podMode = false; podListe = []; podIndex = 0;
+  document.body.classList.remove("podmode");
+  ttsStop();
+  if(podStumm){ try{ podStumm.pause(); }catch(e){} }
+  updateToolbar();
+}
+
+function podSpiele(){
+  if(!podMode) return;
+  if(podIndex >= podListe.length){
+    toast("Alles vorgelesen 🎉", "ok"); podStop(); return;
+  }
+  var id = podListe[podIndex];
+  $("podCount").textContent = (podIndex+1) + " von " + podListe.length;   // sofort umspringen
+  var vorab = S().entries.find(function(x){ return String(x.id)===String(id); });
+  $("podTitle").textContent = (vorab && vorab.title) || "wird geladen …";
+  ensureFull(id).then(function(e){
+    if(!podMode) return;
+    if(!e || !e.summary){ podWeiter(); return; }
+    podZeigeInfo(e);
+    ttsStart(id, "full", podWeiter);       // beim Ende automatisch weiter
+  });
+}
+
+function podWeiter(){
+  if(!podMode) return;
+  podIndex++;
+  if(podIndex < podListe.length) podSpiele();
+  else { toast("Alles vorgelesen 🎉", "ok"); podStop(); }
+}
+function podZurueck(){
+  if(!podMode) return;
+  podIndex = Math.max(0, podIndex - 1);
+  podSpiele();
+}
+
+function podZeigeInfo(e){
+  $("podCount").textContent = (podIndex+1) + " von " + podListe.length;
+  $("podTitle").textContent = e.title || "(ohne Titel)";
+  $("podPlay").textContent = tts.paused ? "▶️" : "⏸️";
+  if("mediaSession" in navigator){
+    try{
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: e.title || "Zusammenfassung",
+        artist: e.channel || e.source || "Zusammenfassungen",
+        album: KIND_UI[kind].logo + " " + (podIndex+1) + "/" + podListe.length,
+        artwork: e.thumbnail ? [{ src:e.thumbnail, sizes:"480x360", type:"image/jpeg" }]
+                             : [{ src:"icons/icon-192.png", sizes:"192x192", type:"image/png" }]
+      });
+      navigator.mediaSession.playbackState = "playing";
+    }catch(err){}
+  }
+}
+
+/* Ein unhörbarer Dauerton – ohne ihn zeigt Android keine Steuerung im Sperrbildschirm. */
+function starteStummenTon(){
+  try{
+    if(!podStumm){
+      podStumm = new Audio("data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQ4AAAAAAAAAAAAAAAAAAAAAAA==");
+      podStumm.loop = true; podStumm.volume = 0.001;
+    }
+    podStumm.play().catch(function(){});
+    if("mediaSession" in navigator){
+      navigator.mediaSession.setActionHandler("play",  function(){ if(tts.paused) ttsToggle(); podPlayIcon(); });
+      navigator.mediaSession.setActionHandler("pause", function(){ if(!tts.paused) ttsToggle(); podPlayIcon(); });
+      navigator.mediaSession.setActionHandler("nexttrack", podWeiter);
+      navigator.mediaSession.setActionHandler("previoustrack", podZurueck);
+    }
+  }catch(e){}
+}
+function podPlayIcon(){ $("podPlay").textContent = tts.paused ? "▶️" : "⏸️"; }
+
+$("playAllBtn").onclick = function(){ podMode ? podStop() : podStart(); };
+$("podPlay").onclick = function(){ ttsToggle(); podPlayIcon(); };
+$("podNext").onclick = podWeiter;
+$("podPrev").onclick = podZurueck;
+$("podStop").onclick = podStop;
 
 /* Nur die Vorlese-Leisten aktualisieren (nicht die ganze Liste neu zeichnen). */
 function updateTtsBars(){
@@ -649,7 +838,10 @@ function signature(arr){
 function matchesSearch(e){
   var qy = S().search;
   if(!qy) return true;
-  var hay = [e.title, e.channel, e.source, e.author, e.summary].concat(e.attachments || []);
+  // Treffer aus der Server-Volltextsuche (findet auch Texte, die noch nicht geladen sind)
+  if(S().serverIds && S().serverIds.indexOf(String(e.id)) >= 0) return true;
+  var hay = [e.title, e.channel, e.source, e.author, e.summary]
+              .concat(e.attachments || []).concat(e.tags || []);
   var tr = e.translations || {};
   for(var k in tr){ if(k.charAt(0) !== "_") hay.push(tr[k]); }
   (e.qa||[]).forEach(function(x){ hay.push(x.q, x.a); });
@@ -672,18 +864,69 @@ function render(){
     list.innerHTML = '<div class="empty"><div class="big">'+(kind==="mail"?"📧":"📭")+'</div>'+emptyMsg+'</div>';
     return;
   }
-  var shown = entries.filter(matchesSearch);
+  var shown = sichtbareEintraege();
+  renderTagbar();
   if(!shown.length){
-    list.innerHTML = '<div class="empty"><div class="big">🔍</div>Keine Treffer für „'+esc(S().search)+'".</div>';
+    var grund = S().search ? ('Keine Treffer für „'+esc(S().search)+'".')
+              : (S().tagFilter ? ('Nichts unter „'+esc(S().tagFilter)+'" in diesem Zeitraum.')
+              : (S().readFilter==="offen" ? "Alles gelesen 🎉" : "Nichts im gewählten Zeitraum."));
+    list.innerHTML = '<div class="empty"><div class="big">🔍</div>'+grund+'</div>';
     return;
   }
   list.innerHTML = shown.map(cardHtml).join("");
   window.scrollTo(0, y);
 }
 
+/* Wendet Suche, Gelesen-Filter, Schlagwort, Zeitraum und Sortierung an. */
+function sichtbareEintraege(){
+  var s = S();
+  var grenze = zeitFilter ? (Date.now() - zeitFilter*86400000) : 0;
+  var liste = s.entries.filter(function(e){
+    if(!matchesSearch(e)) return false;
+    if(s.readFilter==="offen" && e.read) return false;
+    if(s.readFilter==="gelesen" && !e.read) return false;
+    if(s.tagFilter && (e.tags||[]).indexOf(s.tagFilter) < 0) return false;
+    if(grenze){
+      var d = new Date(e.addedAt || e.publishedAt || 0).getTime();
+      if(!d || d < grenze) return false;
+    }
+    return true;
+  });
+  var zeit = function(e){ return new Date(e.addedAt || e.publishedAt || 0).getTime() || 0; };
+  if(sortMode==="alt")        liste.sort(function(a,b){ return zeit(a)-zeit(b); });
+  else if(sortMode==="lang")  liste.sort(function(a,b){ return (parseInt(b.durationSeconds,10)||0)-(parseInt(a.durationSeconds,10)||0); });
+  else if(sortMode==="titel") liste.sort(function(a,b){ return String(a.title||"").localeCompare(String(b.title||""), "de"); });
+  else                        liste.sort(function(a,b){ return zeit(b)-zeit(a); });
+  return liste;
+}
+
+/* Schlagwort-Leiste: die häufigsten Schlagworte des aktuellen Bereichs. */
+function renderTagbar(){
+  var bar = $("tagbar");
+  var zaehler = {};
+  S().entries.forEach(function(e){
+    (e.tags||[]).forEach(function(t){ if(t) zaehler[t] = (zaehler[t]||0)+1; });
+  });
+  var top = Object.keys(zaehler).sort(function(a,b){ return zaehler[b]-zaehler[a] || a.localeCompare(b,"de"); }).slice(0, 18);
+  if(!top.length){ bar.innerHTML = ""; bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  bar.innerHTML = top.map(function(t){
+    return '<button class="tagchip'+(S().tagFilter===t?" on":"")+'" data-tag="'+esc(t)+'">'+esc(t)+' <span style="opacity:.6">'+zaehler[t]+'</span></button>';
+  }).join("");
+}
+
 function cardHtml(e){
   if(kind==="mail") return mailCardHtml(e);
   return kind==="news" ? newsCardHtml(e) : ytCardHtml(e);
+}
+
+/* Schlagworte auf der Karte (antippbar zum Filtern). */
+function tagsHtml(e){
+  var t = e.tags || [];
+  if(!t.length) return "";
+  return '<div class="cardtags">' + t.slice(0,5).map(function(x){
+    return '<span class="cardtag" data-tag="'+esc(x)+'">'+esc(x)+'</span>';
+  }).join("") + '</div>';
 }
 
 function mailCardHtml(e){
@@ -700,9 +943,10 @@ function mailCardHtml(e){
     ? '<div class="attlist">'+atts.map(function(n){ return '<span class="att">📎 '+esc(n)+'</span>'; }).join("")+'</div>'
     : "";
 
-  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"");
+  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"") + (e.read?" gelesen":"");
   return ''+
   '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
+    (e.read ? '<div class="readmark">✓</div>' : '')+
     '<div class="delbg">🗑️ Löschen</div>'+
     '<div class="swipe">'+
       '<div class="head" data-toggle>'+
@@ -712,7 +956,7 @@ function mailCardHtml(e){
           '<p class="title">'+esc(e.title || "(kein Betreff)")+'</p>'+
           '<div class="sub"><span class="badge '+st+'">'+spin+badge+'</span>'+
             (e.source?'<span>'+esc(e.source)+'</span>':'')+'</div>'+
-          statsHtml+
+          statsHtml+ tagsHtml(e)+
           attHtml+
         '</div>'+
       '</div>'+
@@ -745,6 +989,7 @@ function commonBody(e, openLabel){
           '<select class="lang" data-act="translate" title="Sprache wechseln / übersetzen">'+
             '<option value="">🌐 Übersetzen…</option>'+langSel+'</select>' : '')+
       (st==="error" ? '<button class="chip" data-act="retry">🔄 Erneut versuchen</button>' : '')+
+      '<button class="chip" data-act="read">'+(e.read ? "↩️ Als offen markieren" : "✓ Erledigt")+'</button>'+
       '<button class="chip danger" data-act="delete">🗑️ Löschen</button>'+
     '</div>'+
   '</div>';
@@ -763,9 +1008,10 @@ function ytCardHtml(e){
   if(e.commentCount!=="" && e.commentCount!=null) stats.push('<span>💬 '+esc(fmtCount(e.commentCount))+'</span>');
   var statsHtml = stats.length ? '<div class="stats">'+stats.join("")+'</div>' : "";
 
-  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"");
+  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"") + (e.read?" gelesen":"");
   return ''+
   '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
+    (e.read ? '<div class="readmark">✓</div>' : '')+
     '<div class="delbg">🗑️ Löschen</div>'+
     '<div class="swipe">'+
       '<div class="head" data-toggle>'+
@@ -775,7 +1021,7 @@ function ytCardHtml(e){
           '<p class="title">'+esc(e.title || "(wird geladen …)")+'</p>'+
           '<div class="sub"><span class="badge '+st+'">'+spin+badge+'</span>'+
             (e.channel?'<span>'+esc(e.channel)+'</span>':'')+'</div>'+
-          statsHtml+
+          statsHtml+ tagsHtml(e)+
         '</div>'+
       '</div>'+
       commonBody(e, "▶️ Auf YouTube")+
@@ -797,9 +1043,10 @@ function newsCardHtml(e){
   if(e.author) stats.push('<span>✍️ '+esc(e.author)+'</span>');
   var statsHtml = stats.length ? '<div class="stats">'+stats.join("")+'</div>' : "";
 
-  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"");
+  var cls = "card" + (S().openCards[e.id]?" open":"") + (S().selected[e.id]?" selected":"") + (e.read?" gelesen":"");
   return ''+
   '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
+    (e.read ? '<div class="readmark">✓</div>' : '')+
     '<div class="delbg">🗑️ Löschen</div>'+
     '<div class="swipe">'+
       '<div class="head" data-toggle>'+
@@ -809,7 +1056,7 @@ function newsCardHtml(e){
           '<p class="title">'+esc(e.title || "(wird geladen …)")+'</p>'+
           '<div class="sub"><span class="badge '+st+'">'+spin+badge+'</span>'+
             (e.source?'<span>'+esc(e.source)+'</span>':'')+'</div>'+
-          statsHtml+
+          statsHtml+ tagsHtml(e)+
         '</div>'+
       '</div>'+
       commonBody(e, "🔗 Artikel öffnen")+
@@ -899,6 +1146,7 @@ function refresh(k){
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
   return apiFor(k, { action:"list", light:1 }).then(function(res){
     if(res && res.ok){
+      pruefeFertig(k, res.entries || []);     // Benachrichtigung bei "fertig"
       store[k].entries = withPending(k, mergeCached(k, res.entries || []));
       saveCache(k);
       if(k === kind){
@@ -1120,6 +1368,108 @@ document.addEventListener("visibilitychange", function(){
   if(document.visibilityState === "hidden") beaconOutbox(); else processOutbox();
 });
 
+/* ------------------- Gelesen-Status, Filter, Server-Suche ---------------- */
+
+/* Markiert einen Eintrag als erledigt/offen (sofort sichtbar, Server folgt). */
+function toggleRead(id){
+  var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e) return;
+  if(e._tmp){ toast("Wird noch übertragen – gleich nochmal.", "err"); return; }
+  var neu = !e.read;
+  e.read = neu;                       // sofort im Bild
+  saveCache(kind); S().lastSig = ""; render();
+  toast(neu ? "Als erledigt markiert ✓" : "Wieder als offen markiert", "ok");
+  api({ action:"read", id:id, value: neu ? "1" : "0" }).catch(function(){
+    e.read = !neu; saveCache(kind); S().lastSig = ""; render();
+    toast("Konnte nicht gespeichert werden.", "err");
+  });
+}
+
+function setzeTagFilter(tag){
+  S().tagFilter = (S().tagFilter === tag) ? "" : tag;
+  S().lastSig = ""; render();
+  window.scrollTo(0, 0);
+}
+
+/* Volltextsuche auf dem Server – findet auch Texte, die das Handy nie geladen hat. */
+var suchTimer = null;
+function serverSuche(){
+  var q = S().search, k = kind;
+  if(!q || q.length < 2 || !cfg.endpoint || !cfg.secret){ S().serverIds = null; return; }
+  apiFor(k, { action:"search", q:q }).then(function(res){
+    if(res && res.ok && store[k].search === q){
+      var vorher = (store[k].serverIds||[]).length;
+      store[k].serverIds = (res.ids||[]).map(String);
+      if(k === kind && store[k].serverIds.length !== vorher){ store[k].lastSig = ""; render(); }
+    }
+  }).catch(function(){});
+}
+
+$("segRead").addEventListener("click", function(ev){
+  var b = ev.target.closest("button"); if(!b) return;
+  S().readFilter = b.getAttribute("data-read");
+  updateToolbar(); S().lastSig = ""; render();
+});
+$("tagbar").addEventListener("click", function(ev){
+  var b = ev.target.closest(".tagchip"); if(!b) return;
+  setzeTagFilter(b.getAttribute("data-tag"));
+});
+$("sortSel").addEventListener("change", function(){
+  sortMode = this.value; localStorage.setItem("sortMode", sortMode);
+  S().lastSig = ""; render();
+});
+$("zeitSel").addEventListener("change", function(){
+  zeitFilter = parseInt(this.value,10)||0; localStorage.setItem("zeitFilter", String(zeitFilter));
+  S().lastSig = ""; render();
+});
+
+function updateToolbar(){
+  var btns = $("segRead").querySelectorAll("button");
+  for(var i=0;i<btns.length;i++){
+    btns[i].classList.toggle("on", btns[i].getAttribute("data-read") === S().readFilter);
+  }
+  $("sortSel").value = sortMode;
+  $("zeitSel").value = String(zeitFilter);
+  $("playAllBtn").classList.toggle("on", podMode);
+}
+
+/* ---------------------- Benachrichtigung, wenn fertig ------------------- */
+var letzterStatus = {};
+function benachrichtigungenAktiv(){ return localStorage.getItem("notify") === "1"; }
+
+function fragenNachErlaubnis(){
+  if(!("Notification" in window)){ toast("Dein Browser kann keine Benachrichtigungen.", "err"); return; }
+  Notification.requestPermission().then(function(p){
+    if(p === "granted"){ localStorage.setItem("notify","1"); toast("Benachrichtigungen an ✓","ok"); }
+    else { localStorage.setItem("notify","0"); toast("Benachrichtigungen wurden abgelehnt.","err"); }
+    if($("cfgNotify")) $("cfgNotify").checked = benachrichtigungenAktiv();
+  });
+}
+
+function zeigeFertigMeldung(e){
+  if(!benachrichtigungenAktiv() || !("Notification" in window) || Notification.permission !== "granted") return;
+  var titel = e.title || "Zusammenfassung fertig";
+  var text = (e.summary || "").replace(/[*#]/g,"").slice(0,120);
+  try{
+    if(navigator.serviceWorker && navigator.serviceWorker.ready){
+      navigator.serviceWorker.ready.then(function(reg){
+        reg.showNotification("✅ " + titel, { body: text || "Die Zusammenfassung ist fertig.",
+          icon:"icons/icon-192.png", badge:"icons/icon-192.png", tag:"zsf-"+e.id });
+      }).catch(function(){ new Notification("✅ " + titel, { body:text }); });
+    } else { new Notification("✅ " + titel, { body:text }); }
+  }catch(err){}
+}
+
+/* Erkennt Übergänge auf "fertig" und meldet sie. */
+function pruefeFertig(k, neueListe){
+  neueListe.forEach(function(e){
+    var schluessel = k + ":" + e.id;
+    var vorher = letzterStatus[schluessel];
+    if(vorher && vorher !== "done" && e.status === "done") zeigeFertigMeldung(e);
+    letzterStatus[schluessel] = e.status;
+  });
+}
+
 /* ------------------------------- Tabs ----------------------------------- */
 function updateTabsUI(){
   var tabs = $("tabs").querySelectorAll(".tab");
@@ -1136,6 +1486,7 @@ function switchKind(k){
   kind = k; localStorage.setItem("active_kind", k);
   updateTabsUI();
   $("searchInput").value = S().search || "";
+  updateToolbar();
   S().lastSig = ""; render();
   window.scrollTo(0,0);
   refresh(k);
@@ -1148,6 +1499,13 @@ $("tabs").addEventListener("click", function(ev){
 /* ----------------------------- Karten-Events ---------------------------- */
 $("list").addEventListener("click", function(ev){
   if(Date.now() < suppressClickUntil) return;
+  // Schlagwort auf der Karte angetippt -> danach filtern
+  var tagEl = ev.target.closest(".cardtag");
+  if(tagEl && !selectionMode){
+    setzeTagFilter(tagEl.getAttribute("data-tag"));
+    ev.stopPropagation();
+    return;
+  }
   var card = ev.target.closest(".card"); if(!card) return;
   var id = card.getAttribute("data-id");
 
@@ -1170,6 +1528,7 @@ $("list").addEventListener("click", function(ev){
     return;
   }
   var act = ev.target.getAttribute && ev.target.getAttribute("data-act");
+  if(act === "read"){ toggleRead(id); return; }
   if(act === "tts-full"){ ttsStart(id, "full"); return; }
   if(act === "tts-short"){ ttsStart(id, "short"); return; }
   if(act === "tts-toggle"){ ttsToggle(); return; }
@@ -1372,6 +1731,7 @@ function openSettings(){
   $("cfgEndpoint").value = cfg.endpoint;
   $("cfgSecret").value = cfg.secret;
   $("cfgLang").value = cfg.lang;
+  $("cfgNotify").checked = benachrichtigungenAktiv() && ("Notification" in window) && Notification.permission === "granted";
   $("testLine").textContent = "";
   $("settingsOverlay").classList.add("show");
 }
@@ -1478,7 +1838,18 @@ $("scanBtn").onclick = function(){
     } else { toast((res&&res.error)||"Nachsehen fehlgeschlagen.", "err"); }
   }).catch(function(err){ b.disabled = false; toast(err.message, "err"); });
 };
-$("searchInput").addEventListener("input", function(){ S().search = this.value.trim(); render(); });
+$("searchInput").addEventListener("input", function(){
+  S().search = this.value.trim();
+  S().serverIds = null;
+  render();
+  if(suchTimer) clearTimeout(suchTimer);
+  suchTimer = setTimeout(serverSuche, 600);   // Server erst nach kurzer Tippause fragen
+});
+
+$("cfgNotify").addEventListener("change", function(){
+  if(this.checked){ fragenNachErlaubnis(); }
+  else { localStorage.setItem("notify","0"); toast("Benachrichtigungen aus."); }
+});
 
 (function initLangSelect(){
   $("cfgLang").innerHTML = LANGS.map(function(l){ return '<option value="'+l+'">'+l+'</option>'; }).join("");
@@ -1489,6 +1860,7 @@ if("serviceWorker" in navigator){
 }
 
 updateTabsUI();
+updateToolbar();
 $("searchInput").value = S().search || "";
 render();
 updateNotice();
