@@ -384,8 +384,18 @@ function toast(msg, kind2){
     setTimeout(function(){ t.remove(); }, 300); }, kind2==="err" ? 4200 : 2600);
 }
 
-/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet. */
+/* Anfragen laufen bewusst NACHEINANDER: Apps Script verträgt keine parallelen Aufrufe
+   desselben Kontos zuverlässig (sonst brechen einzelne Abrufe mit "Netzwerkfehler" ab). */
+var apiQueue = Promise.resolve();
 function api(params){
+  var starte = function(){ return apiRaw(params); };
+  var p = apiQueue.then(starte, starte);
+  apiQueue = p.catch(function(){});   // Fehler blockiert die Warteschlange nicht
+  return p;
+}
+
+/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet. */
+function apiRaw(params){
   return new Promise(function(resolve, reject){
     if(!cfg.endpoint || !cfg.secret){ reject(new Error("NO_CONFIG")); return; }
     var cb = "__cb" + Math.random().toString(36).slice(2);
@@ -717,6 +727,8 @@ function commonBody(e, openLabel){
   var bodyInner = "";
   if(st === "error"){
     bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>';
+  } else if(st === "done" && !e.summary){
+    bodyInner = '<p style="color:var(--muted)"><span class="spin"></span> Text wird geladen …</p>';
   } else if(st === "done"){
     var current = S().viewLang[e.id] || e.language || "Deutsch";
     var text = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
@@ -822,14 +834,62 @@ function qaHtml(e){
 }
 
 /* --------------------------- Liste aktualisieren ------------------------ */
+/* Übernimmt Volltexte aus dem lokalen Zwischenspeicher in die neu geladene (schlanke) Liste.
+   So bleiben Zusammenfassungen, Übersetzungen und Fragen erhalten, ohne sie erneut zu laden. */
+function mergeCached(k, fresh){
+  var alt = {};
+  (store[k].entries || []).forEach(function(e){ alt[e.id] = e; });
+  return fresh.map(function(e){
+    if(!e.light) return e;                       // Vollversion: nichts zu tun
+    var a = alt[e.id];
+    if(a && a.summary && String(a.processedAt) === String(e.processedAt)){
+      e.summary = a.summary;                     // unveränderter Text -> aus dem Speicher
+      e.qa = a.qa || [];
+      if(a.translations) e.translations = a.translations;
+      delete e.light;
+    }
+    return e;
+  });
+}
+
+/* Holt den Volltext eines Eintrags nach (nur wenn er noch fehlt). */
+function ensureFull(id, forKind){
+  var k = forKind || kind;
+  var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e) return Promise.resolve(null);
+  if(e.summary || e.status !== "done") return Promise.resolve(e);
+  return apiFor(k, { action:"get", id:id }).then(function(res){
+    if(res && res.ok && res.entry){
+      var i = store[k].entries.findIndex(function(x){ return String(x.id)===String(id); });
+      if(i >= 0){
+        store[k].entries[i] = res.entry;
+        saveCache(k);
+      }
+      return res.entry;
+    }
+    return e;
+  }).catch(function(){ return e; });
+}
+
+/* Zwischenspeicher schreiben – bei Platzmangel die ältesten Volltexte opfern. */
+function saveCache(k){
+  try{
+    localStorage.setItem(store[k].cacheKey, JSON.stringify(store[k].entries));
+  }catch(err){
+    var schlank = store[k].entries.map(function(e, i){
+      return i < 30 ? e : Object.assign({}, e, { summary:"", qa:[], light:true });
+    });
+    try{ localStorage.setItem(store[k].cacheKey, JSON.stringify(schlank)); }catch(e2){}
+  }
+}
+
 function refresh(k){
   k = k || kind;
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
-  var prevKind = kind, tmp = kind;
-  return apiFor(k, { action:"list" }).then(function(res){
+  return apiFor(k, { action:"list", light:1 }).then(function(res){
     if(res && res.ok){
-      store[k].entries = res.entries || [];
-      localStorage.setItem(store[k].cacheKey, JSON.stringify(store[k].entries));
+      store[k].entries = mergeCached(k, res.entries || []);
+      saveCache(k);
       if(k === kind){
         var sig = signature(store[k].entries);
         var typing = document.activeElement && document.activeElement.classList &&
@@ -839,6 +899,7 @@ function refresh(k){
         updateCounts();
       }
       schedulePolling();
+      prefetchNewest(k);
     } else if(res && res.error){
       toast(res.error, "err");
     }
@@ -847,12 +908,29 @@ function refresh(k){
   });
 }
 
-/* api-Aufruf für eine bestimmte Art (unabhängig von der aktiven Ansicht). */
+/* Lädt im Hintergrund die Volltexte der neuesten Einträge nach (wenige, nacheinander),
+   damit Antippen und Suche sofort greifen. Ältere kommen beim Öffnen dazu. */
+var prefetching = {};
+function prefetchNewest(k, max){
+  if(prefetching[k]) return;
+  var fehlend = store[k].entries.filter(function(e){ return e.status==="done" && !e.summary; })
+                                .slice(0, max || 4);
+  if(!fehlend.length) return;
+  prefetching[k] = true;
+  var chain = Promise.resolve();
+  fehlend.forEach(function(e){
+    chain = chain.then(function(){ return ensureFull(e.id, k); });
+  });
+  chain.then(function(){
+    prefetching[k] = false;
+    if(k === kind){ store[k].lastSig = ""; render(); }
+  }).catch(function(){ prefetching[k] = false; });
+}
+
+/* api-Aufruf für eine bestimmte Art (unabhängig von der aktiven Ansicht).
+   Die Art wird fest mitgegeben – wichtig, weil Aufrufe in der Warteschlange verzögert starten. */
 function apiFor(k, params){
-  var saved = kind; kind = k;
-  var pr = api(params);
-  kind = saved;
-  return pr;
+  return api(Object.assign({ kind:k }, params));
 }
 
 function refreshAll(){ KINDS.forEach(function(k){ refresh(k); }); }
@@ -986,7 +1064,14 @@ $("list").addEventListener("click", function(ev){
 
   if(ev.target.closest("[data-toggle]")){
     card.classList.toggle("open");
-    if(card.classList.contains("open")) S().openCards[id] = true;
+    if(card.classList.contains("open")){
+      S().openCards[id] = true;
+      // Volltext bei Bedarf nachladen (Liste enthält nur Metadaten)
+      var e0 = S().entries.find(function(x){ return String(x.id)===String(id); });
+      if(e0 && e0.status==="done" && !e0.summary){
+        ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
+      }
+    }
     else {
       delete S().openCards[id];
       if(tts.playing && String(tts.id)===String(id)) ttsStop(); // zugeklappt = Vorlesen beenden
@@ -1006,12 +1091,12 @@ $("list").addEventListener("click", function(ev){
   } else if(act === "ask"){
     submitQuestion(id, card.querySelector(".qain"));
   } else if(act === "copy"){
-    var e = S().entries.find(function(x){ return String(x.id)===String(id); });
-    var current = S().viewLang[id] || (e && e.language) || "Deutsch";
-    var text = (e && (current===(e.language||"Deutsch") ? e.summary : (e.translations||{})[current])) || (e && e.summary) || "";
-    var full = (e? (e.title+"\n"+e.url+"\n\n") : "") + text;
-    (navigator.clipboard ? navigator.clipboard.writeText(full) : Promise.reject())
-      .then(function(){ toast("In Zwischenablage kopiert.", "ok"); })
+    ensureFull(id).then(function(e){
+      var current = S().viewLang[id] || (e && e.language) || "Deutsch";
+      var text = (e && (current===(e.language||"Deutsch") ? e.summary : (e.translations||{})[current])) || (e && e.summary) || "";
+      var full = (e? (e.title+"\n"+e.url+"\n\n") : "") + text;
+      return (navigator.clipboard ? navigator.clipboard.writeText(full) : Promise.reject());
+    }).then(function(){ toast("In Zwischenablage kopiert.", "ok"); })
       .catch(function(){ toast("Kopieren nicht möglich.", "err"); });
   }
 });
@@ -1040,7 +1125,7 @@ function submitQuestion(id, input){
     if(res && res.ok){
       e.qa = res.qa || (e.qa||[]).concat([{ q:q, a:res.answer }]);
       S().qaDraft[id] = "";
-      localStorage.setItem(S().cacheKey, JSON.stringify(S().entries));
+      saveCache(kind);
       S().lastSig = ""; render(); reopen(id);
       toast("Antwort da.", "ok");
     } else { if(input) input.disabled = false; toast((res&&res.error)||"Frage fehlgeschlagen.", "err"); }
@@ -1175,7 +1260,7 @@ $("list").addEventListener("change", function(ev){
     if(res && res.ok){
       e.translations = e.translations || {};
       e.translations[lang] = res.text;
-      localStorage.setItem(S().cacheKey, JSON.stringify(S().entries));
+      saveCache(kind);
       S().viewLang[id] = lang;
       render(); reopen(id);
       toast("Übersetzt.", "ok");
