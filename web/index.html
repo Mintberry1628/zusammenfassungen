@@ -366,13 +366,16 @@
     <p class="desc">Verbinde die App mit deinem Apps-Script-Backend. Beides bekommst du in der SETUP-Anleitung.</p>
     <div class="field">
       <label>Web-App-URL (Apps Script)</label>
-      <input id="cfgEndpoint" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+      <input id="cfgEndpoint" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec"
+             autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
       <div class="help">Die URL aus „Bereitstellen → Web-App".</div>
     </div>
     <div class="field">
       <label>Geheimes Passwort (Token)</label>
-      <input id="cfgSecret" type="text" placeholder="dein selbst gewähltes Passwort" autocomplete="off">
-      <div class="help">Muss exakt dem SHARED_SECRET im Skript entsprechen.</div>
+      <input id="cfgSecret" type="text" placeholder="dein selbst gewähltes Passwort"
+             autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <div class="help">Muss <b>zeichengenau</b> dem SHARED_SECRET im Skript entsprechen –
+        auch Groß- und Kleinschreibung. <span id="secretInfo"></span></div>
     </div>
     <div class="field">
       <label>Standardsprache neuer Zusammenfassungen</label>
@@ -1787,7 +1790,18 @@ $("testBtn").onclick = function(){
   api({ action:"ping" }).then(function(res){
     fertig();
     if(res && res.ok){ $("testLine").innerHTML = '<span style="color:var(--ok)">✓ Verbindung erfolgreich!</span>'; }
-    else { $("testLine").innerHTML = '<span style="color:var(--err)">✗ '+esc((res&&res.error)||"Antwort ungültig")+'</span>'; cfg.endpoint=saved.e; cfg.secret=saved.s; }
+    else {
+      var fehler = (res&&res.error) || "Antwort ungültig";
+      // Beim Token-Fehler konkret weiterhelfen statt nur den Servertext zu zeigen
+      var hilfe = /token/i.test(fehler)
+        ? '<span style="color:var(--err)">✗ Das Passwort stimmt nicht.</span>' +
+          '<div class="help" style="margin-top:6px">Die Adresse ist richtig – nur das Passwort passt nicht. ' +
+          'Achte auf <b>Groß- und Kleinschreibung</b>: Handytastaturen ändern gern den ersten oder zweiten ' +
+          'Buchstaben. Am sichersten: Passwort im Apps-Script markieren, kopieren und hier einfügen.</div>'
+        : '<span style="color:var(--err)">✗ '+esc(fehler)+'</span>';
+      $("testLine").innerHTML = hilfe;
+      cfg.endpoint=saved.e; cfg.secret=saved.s;
+    }
   }).catch(function(err){
     fertig();
     $("testLine").innerHTML = '<span style="color:var(--err)">✗ '+esc(err.message)+'</span>';
@@ -1870,6 +1884,18 @@ $("searchInput").addEventListener("input", function(){
   render();
   if(suchTimer) clearTimeout(suchTimer);
   suchTimer = setTimeout(serverSuche, 600);   // Server erst nach kurzer Tippause fragen
+});
+
+/* Live-Kontrolle des Passwortfeldes – macht unsichtbare Tippfehler sichtbar. */
+$("cfgSecret").addEventListener("input", function(){
+  var v = this.value, info = $("secretInfo"), warn = [];
+  if(!v){ info.innerHTML = ""; return; }
+  if(v !== v.trim()) warn.push("Leerzeichen am Anfang/Ende");
+  if(/\s/.test(v.trim())) warn.push("Leerzeichen im Passwort");
+  info.innerHTML = warn.length
+    ? '<b style="color:var(--warn)">⚠️ '+warn.join(", ")+'</b>'
+    : '<span style="color:var(--muted)">Eingegeben: '+v.length+' Zeichen, '+
+      (v.replace(/[^A-Z]/g,"").length)+' davon GROSS</span>';
 });
 
 $("cfgNotify").addEventListener("change", function(){
