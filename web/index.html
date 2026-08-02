@@ -883,12 +883,23 @@ function saveCache(k){
   }
 }
 
+/* Noch nicht abgeschickte Platzhalter oben behalten, damit sie beim Aktualisieren
+   nicht kurzzeitig verschwinden. */
+function withPending(k, liste){
+  var offen = outboxGet().filter(function(x){ return x.kind === k; });
+  if(!offen.length) return liste;
+  var vorhanden = {};
+  (store[k].entries || []).forEach(function(e){ if(e._tmp) vorhanden[e.id] = e; });
+  var platzhalter = offen.map(function(x){ return vorhanden[x.tmpId]; }).filter(Boolean);
+  return platzhalter.concat(liste);
+}
+
 function refresh(k){
   k = k || kind;
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
   return apiFor(k, { action:"list", light:1 }).then(function(res){
     if(res && res.ok){
-      store[k].entries = mergeCached(k, res.entries || []);
+      store[k].entries = withPending(k, mergeCached(k, res.entries || []));
       saveCache(k);
       if(k === kind){
         var sig = signature(store[k].entries);
@@ -996,38 +1007,118 @@ function addMixed(text){
   if(s.news.length) addLinks("news", s.news);
 }
 
+/* --------- Postausgang: Links werden sofort angenommen und im Hintergrund gesendet --------
+   Dadurch bekommst du unmittelbar eine Bestätigung und kannst sofort weitermachen –
+   auch wenn du die App gleich wieder schließt, geht nichts verloren. */
+function outboxGet(){ try{ return JSON.parse(localStorage.getItem("outbox")||"[]"); }catch(e){ return []; } }
+function outboxSet(a){ try{ localStorage.setItem("outbox", JSON.stringify(a)); }catch(e){} }
+
+function normUrl(u){ return String(u||"").replace(/^https?:\/\//i,"").replace(/\/+$/,"").toLowerCase(); }
+function videoIdOf(u){
+  var m = String(u||"").match(/[?&]v=([A-Za-z0-9_-]{11})|youtu\.be\/([A-Za-z0-9_-]{11})|\/shorts\/([A-Za-z0-9_-]{11})/);
+  return m ? (m[1]||m[2]||m[3]) : "";
+}
+/* Ist der Link (nach einem Abgleich mit dem Server) bereits in der Liste? */
+function schonVorhanden(k, url){
+  if(k === "yt"){
+    var vid = videoIdOf(url);
+    if(vid) return store.yt.entries.some(function(e){ return !e._tmp && String(e.id)===vid; });
+  }
+  return store[k].entries.some(function(e){ return !e._tmp && normUrl(e.url)===normUrl(url); });
+}
+
 function addLinks(k, links){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var ui = KIND_UI[k];
   if(!links.length){ toast(k==="news" ? "Kein Artikel-Link erkannt." : "Kein YouTube-Link erkannt.", "err"); return; }
-  $("addBtn").disabled = true;
-  var added = 0, dup = 0;
+
+  // 1) SOFORT: Platzhalter anlegen, Bestätigung zeigen – kein Warten auf den Server
+  var ob = outboxGet();
+  links.forEach(function(url){
+    var tmpId = "tmp_" + Math.random().toString(36).slice(2);
+    store[k].entries.unshift({
+      kind:k, id:tmpId, url:url, title:"", channel:"", source:(url.split("/")[2]||"").replace(/^www\./,""),
+      thumbnail: (k==="yt" && videoIdOf(url)) ? ("https://i.ytimg.com/vi/"+videoIdOf(url)+"/hqdefault.jpg") : "",
+      status:"pending", language:cfg.lang, summary:"", translations:{}, qa:[],
+      addedAt:new Date().toISOString(), _tmp:true
+    });
+    ob.push({ kind:k, url:url, tmpId:tmpId });
+  });
+  outboxSet(ob);
+  saveCache(k);
+  if(k === kind){ $("addInput").value = ""; S().lastSig = ""; render(); }
+  else { updateCounts(); }
+  toast(links.length + " " + (links.length===1?ui.noun1:ui.nounN) + " übernommen ✓", "ok");
+
+  // 2) DANACH: im Hintergrund tatsächlich absenden
+  processOutbox();
+}
+
+/* Entfernt einen noch nicht abgeschickten Platzhalter (lokal + aus dem Postausgang). */
+function entfernePlatzhalter(id){
+  if(String(id).indexOf("tmp_") !== 0) return false;
+  outboxSet(outboxGet().filter(function(x){ return x.tmpId !== id; }));
+  store[kind].entries = store[kind].entries.filter(function(e){ return e.id !== id; });
+  saveCache(kind);
+  S().lastSig = ""; render();
+  toast("Gelöscht.", "ok");
+  return true;
+}
+
+var outboxRunning = false;
+function processOutbox(){
+  if(outboxRunning || !cfg.endpoint || !cfg.secret) return;
+  var items = outboxGet();
+  if(!items.length) return;
+  outboxRunning = true;
   var chain = Promise.resolve();
-  links.forEach(function(link){
+  items.forEach(function(it){
     chain = chain.then(function(){
-      return apiFor(k, { action:"add", url:link }).then(function(res){
-        if(res && res.ok){ res.duplicate ? dup++ : added++; }
-        else if(res && res.error){ toast(res.error, "err"); }
-      });
+      // Schon angekommen (z. B. per Beacon beim Schließen gesendet)? Dann nur aufräumen.
+      if(schonVorhanden(it.kind, it.url)){ outboxDone(it, null); return; }
+      return apiFor(it.kind, { action:"add", url:it.url }).then(function(res){
+        if(res && res.ok){ outboxDone(it, res.entry); }
+        else if(res && res.error){ outboxDone(it, null); toast(res.error, "err"); }
+      }).catch(function(){ /* bleibt im Postausgang und wird später erneut versucht */ });
     });
   });
   chain.then(function(){
-    $("addBtn").disabled = false;
-    if(k === kind) $("addInput").value = "";
-    var msg;
-    if(!added && dup){
-      msg = (dup===1 ? "War schon in der Liste" : dup+" waren schon in der Liste") + " – jetzt wieder ganz oben.";
-    } else {
-      msg = added + " " + (added===1?ui.noun1:ui.nounN) + " hinzugefügt";
-      if(dup) msg += " ("+dup+" bereits vorhanden – nach oben verschoben)";
-    }
-    toast(msg, "ok");
-    refresh(k).then(function(){ setTimeout(function(){ refresh(k); }, 4000); });
-  }).catch(function(err){
-    $("addBtn").disabled = false;
-    toast(err.message || "Fehler beim Hinzufügen.", "err");
+    outboxRunning = false;
+    if(outboxGet().length) return;      // Reste beim nächsten Durchlauf
+    refresh(kind);
+  }).catch(function(){ outboxRunning = false; });
+}
+
+/* Platzhalter durch den echten Eintrag ersetzen und aus dem Postausgang nehmen. */
+function outboxDone(it, entry){
+  outboxSet(outboxGet().filter(function(x){ return x.tmpId !== it.tmpId; }));
+  var arr = store[it.kind].entries;
+  var i = arr.findIndex(function(e){ return e.id === it.tmpId; });
+  if(i < 0) return;
+  var schon = entry ? arr.findIndex(function(e){ return !e._tmp && String(e.id)===String(entry.id); }) : -1;
+  if(entry && schon < 0) arr[i] = entry; else arr.splice(i, 1);
+  saveCache(it.kind);
+  if(it.kind === kind){ store[kind].lastSig = ""; render(); }
+  else updateCounts();
+}
+
+/* Beim Schließen/Wegwischen der App noch offene Links verlässlich abschicken.
+   sendBeacon läuft auch dann weiter, wenn die Seite bereits geschlossen ist. */
+function beaconOutbox(){
+  var items = outboxGet();
+  if(!items.length || !navigator.sendBeacon || !cfg.endpoint || !cfg.secret) return;
+  items.forEach(function(it){
+    try{
+      var p = "action=add&kind="+encodeURIComponent(it.kind)+"&url="+encodeURIComponent(it.url)+
+              "&token="+encodeURIComponent(cfg.secret);
+      navigator.sendBeacon(cfg.endpoint, new Blob([p], { type:"application/x-www-form-urlencoded" }));
+    }catch(e){}
   });
 }
+window.addEventListener("pagehide", beaconOutbox);
+document.addEventListener("visibilitychange", function(){
+  if(document.visibilityState === "hidden") beaconOutbox(); else processOutbox();
+});
 
 /* ------------------------------- Tabs ----------------------------------- */
 function updateTabsUI(){
@@ -1085,6 +1176,7 @@ $("list").addEventListener("click", function(ev){
   if(act === "tts-stop"){ ttsStop(); return; }
   if(act === "delete"){
     if(!confirm("Diesen Eintrag wirklich löschen?")) return;
+    if(entfernePlatzhalter(id)) return;   // noch nicht abgeschickt -> nur lokal entfernen
     api({ action:"delete", id:id }).then(function(){ toast("Gelöscht.", "ok"); refresh(); });
   } else if(act === "retry"){
     api({ action:"retry", id:id }).then(function(){ toast("Wird erneut versucht …", "ok"); refresh(); });
@@ -1172,6 +1264,7 @@ function onTouchEnd(){
   tc.swipe.style.transition = "transform .2s";
   if(-tc.dx > w * 0.45){
     tc.swipe.style.transform = "translateX(-" + w + "px)";
+    if(entfernePlatzhalter(tc.id)) return;
     api({ action:"delete", id:tc.id }).then(function(){ toast("Gelöscht.", "ok"); refresh(); })
       .catch(function(err){ toast(err.message, "err"); tc.swipe.style.transform = ""; });
   } else {
@@ -1403,6 +1496,7 @@ handleShareTarget();
 flushPendingShares();
 initHistory();
 refreshAll();
+processOutbox();   // beim letzten Mal nicht abgeschickte Links nachreichen
 </script>
 </body>
 </html>
