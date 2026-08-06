@@ -79,6 +79,7 @@
     cursor:pointer; background:var(--accent); color:#fff; transition:.15s; white-space:nowrap;
   }
   .btn.secondary{background:var(--card2); color:var(--text); border:1px solid var(--line)}
+  .btn.danger{background:var(--err); color:#fff}
   .btn:active{transform:scale(.97)}
   .btn:disabled{opacity:.5; cursor:default}
 
@@ -202,9 +203,11 @@
   .stats{color:var(--muted); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; margin-top:4px}
   .stats span{white-space:nowrap}
 
-  /* Wischen zum Löschen */
-  .card .delbg{position:absolute; inset:0; background:var(--err); color:#fff; display:flex;
-    align-items:center; justify-content:flex-end; gap:6px; padding:0 22px; font-weight:700; font-size:14px}
+  /* Wischen: nach links löschen, nach rechts archivieren bzw. zurückholen */
+  .card .delbg,.card .archbg{position:absolute; inset:0; color:#fff; display:flex;
+    align-items:center; gap:6px; padding:0 22px; font-weight:700; font-size:14px}
+  .card .delbg{background:var(--err); justify-content:flex-end}
+  .card .archbg{background:var(--ok); justify-content:flex-start}
   .card .swipe{position:relative; z-index:1; background:var(--card); touch-action:pan-y}
 
   /* Auswahlmodus */
@@ -218,10 +221,11 @@
 
   /* Auswahl-Werkzeugleiste unten */
   .selbar{position:fixed; left:0; right:0; bottom:0; z-index:60; background:var(--bg2);
-    border-top:1px solid var(--line); display:none; align-items:center; gap:10px;
-    padding:12px 16px calc(12px + env(safe-area-inset-bottom)); box-shadow:0 -4px 20px rgba(0,0,0,.3)}
+    border-top:1px solid var(--line); display:none; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom)); box-shadow:0 -4px 20px rgba(0,0,0,.3)}
   body.selmode .selbar{display:flex}
-  .selbar .cnt{flex:1; font-weight:600; font-size:15px}
+  .selbar .cnt{flex:1 0 100%; order:-1; font-weight:600; font-size:13px; color:var(--muted)}
+  .selbar .btn{flex:1; padding:10px 8px; font-size:14px; white-space:nowrap}
 
   /* Fragen zum Inhalt (Q&A) */
   .qa{border-top:1px solid var(--line); margin-top:12px; padding-top:12px}
@@ -456,9 +460,12 @@
 </div>
 
 <div class="selbar" id="selbar">
-  <button class="iconbtn" id="selCancel" title="Abbrechen">✕</button>
+  <button class="iconbtn" id="selCancel" title="Abbrechen" aria-label="Auswahl beenden">✕</button>
   <span class="cnt" id="selCount">0 ausgewählt</span>
-  <button class="btn" id="selDelete">🗑️ Löschen</button>
+  <button class="btn secondary" id="selAll">Alle</button>
+  <button class="btn secondary" id="selNone">Keine</button>
+  <button class="btn secondary" id="selArchive">📥 Archiv</button>
+  <button class="btn danger" id="selDelete">🗑️</button>
 </div>
 
 <div id="toasts"></div>
@@ -1338,6 +1345,7 @@ function mailCardHtml(e){
   '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
     (e.read ? '<div class="readmark">✓</div>' : '')+
     '<div class="delbg">🗑️ Löschen</div>'+
+    '<div class="archbg">'+(e.read ? '↩️ Zurück in die Liste' : '📥 Ins Archiv')+'</div>'+
     '<div class="swipe">'+
       '<div class="head" data-toggle>'+
         '<div class="selmark">'+(S().selected[e.id]?"✓":"")+'</div>'+
@@ -1407,6 +1415,7 @@ function ytCardHtml(e){
   '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
     (e.read ? '<div class="readmark">✓</div>' : '')+
     '<div class="delbg">🗑️ Löschen</div>'+
+    '<div class="archbg">'+(e.read ? '↩️ Zurück in die Liste' : '📥 Ins Archiv')+'</div>'+
     '<div class="swipe">'+
       '<div class="head" data-toggle>'+
         '<div class="selmark">'+(S().selected[e.id]?"✓":"")+'</div>'+
@@ -1442,6 +1451,7 @@ function newsCardHtml(e){
   '<div class="'+cls+'" data-id="'+esc(e.id)+'">'+
     (e.read ? '<div class="readmark">✓</div>' : '')+
     '<div class="delbg">🗑️ Löschen</div>'+
+    '<div class="archbg">'+(e.read ? '↩️ Zurück in die Liste' : '📥 Ins Archiv')+'</div>'+
     '<div class="swipe">'+
       '<div class="head" data-toggle>'+
         '<div class="selmark">'+(S().selected[e.id]?"✓":"")+'</div>'+
@@ -1567,7 +1577,7 @@ function refresh(k, laut){
     if(res && res.ok){
       if(abrufFehler){ abrufFehler = 0; updateNotice(); }
       pruefeFertig(k, res.entries || []);     // Benachrichtigung bei "fertig"
-      store[k].entries = withPending(k, mergeCached(k, res.entries || []));
+      store[k].entries = entferneDoppelte(k, withPending(k, mergeCached(k, res.entries || [])));
       saveCache(k);
       if(k === kind){
         var sig = signature(store[k].entries);
@@ -1707,6 +1717,42 @@ function videoIdOf(u){
   var m = String(u||"").match(/[?&]v=([A-Za-z0-9_-]{11})|youtu\.be\/([A-Za-z0-9_-]{11})|\/shorts\/([A-Za-z0-9_-]{11})/);
   return m ? (m[1]||m[2]||m[3]) : "";
 }
+/* Erkennungsmerkmal eines Beitrags – bei Videos die Video-Kennung, sonst die Adresse.
+   Damit fallen auch Platzhalter und ihr späterer echter Eintrag zusammen. */
+function eintragSchluessel(k, e){
+  if(k === "yt"){
+    // Video-Kennung bevorzugen: youtu.be/…, /shorts/… und watch?v=… meinen dasselbe Video
+    var vid = videoIdOf(e.url) || (/^[A-Za-z0-9_-]{11}$/.test(String(e.id||"")) ? e.id : "");
+    if(vid) return "yt:" + vid;
+  }
+  return k + ":" + (normUrl(e.url) || e.id || Math.random());
+}
+/* Welcher von zwei gleichen Einträgen ist der wertvollere? Fertig schlägt alles. */
+function eintragRang(e){
+  if(e._tmp) return 0;
+  if(e.status === "done") return 3;
+  if(e.status === "error") return 1;
+  return 2;
+}
+/* Sicherheitsnetz gegen doppelte Einträge: Bleibt ein Platzhalter hängen oder steht dasselbe
+   Video zweimal in der Tabelle, zeigt die App trotzdem nur den besten Eintrag. */
+function entferneDoppelte(k, liste){
+  var beste = {}, reihenfolge = [];
+  liste.forEach(function(e){
+    var sl = eintragSchluessel(k, e);
+    if(!beste[sl]){ beste[sl] = e; reihenfolge.push(sl); return; }
+    if(eintragRang(e) > eintragRang(beste[sl])) beste[sl] = e;
+  });
+  return reihenfolge.map(function(sl){ return beste[sl]; });
+}
+
+/* Bereits vorhandener Eintrag zu einer Adresse (ohne Platzhalter). */
+function findeEintrag(k, url){
+  var sl = eintragSchluessel(k, { url:url, id:"" });
+  return store[k].entries.filter(function(e){ return !e._tmp; })
+    .find(function(e){ return eintragSchluessel(k, e) === sl; }) || null;
+}
+
 /* Ist der Link (nach einem Abgleich mit dem Server) bereits in der Liste? */
 function schonVorhanden(k, url){
   if(k === "yt"){
@@ -1723,8 +1769,23 @@ function addLinks(k, links){
 
   // 1) SOFORT: Platzhalter anlegen, Bestätigung zeigen – kein Warten auf den Server
   var ob = outboxGet();
+  var schonDa = 0;
   links.forEach(function(url){
     var tmpId = "tmp_" + Math.random().toString(36).slice(2);
+    var vorhanden = findeEintrag(k, url);
+    if(vorhanden && vorhanden.status !== "error"){
+      // Schon in der Liste: keinen zweiten Eintrag anlegen, sondern nach oben schieben.
+      var idx = store[k].entries.indexOf(vorhanden);
+      if(idx > 0){ store[k].entries.splice(idx, 1); store[k].entries.unshift(vorhanden); }
+      vorhanden.addedAt = new Date().toISOString();
+      schonDa++;
+      ob.push({ kind:k, url:url, tmpId:tmpId });   // Server soll die Reihenfolge auch anpassen
+      return;
+    }
+    if(vorhanden && vorhanden.status === "error"){
+      // Kaputter Versuch: verschwindet, der neue Anlauf nimmt seinen Platz ein.
+      store[k].entries = store[k].entries.filter(function(e){ return e !== vorhanden; });
+    }
     store[k].entries.unshift({
       kind:k, id:tmpId, url:url, title:"", channel:"", source:(url.split("/")[2]||"").replace(/^www\./,""),
       thumbnail: (k==="yt" && videoIdOf(url)) ? ("https://i.ytimg.com/vi/"+videoIdOf(url)+"/hqdefault.jpg") : "",
@@ -1737,7 +1798,13 @@ function addLinks(k, links){
   saveCache(k);
   if(k === kind){ $("addInput").value = ""; S().lastSig = ""; render(); }
   else { updateCounts(); }
-  toast(links.length + " " + (links.length===1?ui.noun1:ui.nounN) + " übernommen ✓", "ok");
+  if(schonDa === links.length){
+    toast(schonDa===1 ? "War schon da – nach oben geschoben." : schonDa+" waren schon da – nach oben geschoben.");
+  } else if(schonDa){
+    toast((links.length-schonDa) + " neu · " + schonDa + " schon vorhanden", "ok");
+  } else {
+    toast(links.length + " " + (links.length===1?ui.noun1:ui.nounN) + " übernommen ✓", "ok");
+  }
 
   // 2) DANACH: im Hintergrund tatsächlich absenden
   processOutbox();
@@ -1820,12 +1887,25 @@ function toggleRead(id){
   if(!e) return;
   if(e._tmp){ toast("Wird noch übertragen – gleich nochmal.", "err"); return; }
   var neu = !e.read;
-  e.read = neu;                       // sofort im Bild
-  saveCache(kind); S().lastSig = ""; render();
   toast(neu ? "Ins Archiv verschoben ✓" : "Zurück in der Liste", "ok");
-  api({ action:"read", id:id, value: neu ? "1" : "0" }).catch(function(){
-    e.read = !neu; saveCache(kind); S().lastSig = ""; render();
-    toast("Konnte nicht gespeichert werden.", "err");
+  setzeGelesen(id, neu, kind);
+}
+
+/* Archiv-Zustand setzen – sofort im Bild, der Server folgt. Scheitert es, wird zurückgedreht. */
+function setzeGelesen(id, wert, forKind){
+  var k = forKind || kind;
+  var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e || e._tmp || e.read === wert) return;
+  e.read = wert;
+  saveCache(k);
+  if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
+  apiFor(k, { action:"read", id:id, value: wert ? "1" : "0" }).then(function(res){
+    if(res && res.ok) return;
+    throw new Error((res && res.error) || "abgelehnt");
+  }).catch(function(){
+    e.read = !wert; saveCache(k);
+    if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
+    toast("Archiv-Änderung konnte nicht gespeichert werden.", "err");
   });
 }
 
@@ -2044,12 +2124,8 @@ $("list").addEventListener("click", function(ev){
   if(act === "tts-stop"){ podMode ? podStop() : ttsStop(); return; }
   if(act === "delete"){
     if(!confirm("Diesen Eintrag wirklich löschen?")) return;
-    if(entfernePlatzhalter(id)) return;   // noch nicht abgeschickt -> nur lokal entfernen
-    stoppeVorlesen(id);
-    api({ action:"delete", id:id }).then(function(res){
-      if(res && res.ok){ toast("Gelöscht.", "ok"); refresh(); }
-      else toast((res && res.error) || "Löschen hat nicht geklappt.", "err");
-    }).catch(function(err){ toast(err.message, "err"); });
+    toast("Gelöscht.", "ok");
+    loescheEintrag(id);
   } else if(act === "retry"){
     api({ action:"retry", id:id }).then(function(res){
       if(res && res.ok){ toast("Wird erneut versucht …", "ok"); refresh(); }
@@ -2125,7 +2201,8 @@ function onTouchMove(ev){
   }
   if(touch.swiping){
     ev.preventDefault();
-    var tx = Math.max(-touch.card.offsetWidth, Math.min(0, touch.dx));
+    var breite = touch.card.offsetWidth;
+    var tx = Math.max(-breite, Math.min(breite, touch.dx));
     touch.swipe.style.transform = "translateX(" + tx + "px)";
   }
 }
@@ -2136,19 +2213,44 @@ function onTouchEnd(){
   if(!tc.swiping) return;
   suppressClickUntil = Date.now() + 400;
   var w = tc.card.offsetWidth;
+  var genug = w * 0.4;
   tc.swipe.style.transition = "transform .2s";
-  if(-tc.dx > w * 0.45){
+  if(-tc.dx > genug){                       // nach links: löschen
     tc.swipe.style.transform = "translateX(-" + w + "px)";
-    if(entfernePlatzhalter(tc.id)) return;
-    stoppeVorlesen(tc.id);
-    api({ action:"delete", id:tc.id }).then(function(res){
-      if(res && res.ok){ toast("Gelöscht.", "ok"); refresh(); }
-      else { toast((res && res.error) || "Löschen hat nicht geklappt.", "err"); tc.swipe.style.transform = ""; }
-    }).catch(function(err){ toast(err.message, "err"); tc.swipe.style.transform = ""; });
+    loescheEintrag(tc.id);
+  } else if(tc.dx > genug){                 // nach rechts: ins Archiv bzw. zurück in die Liste
+    tc.swipe.style.transform = "translateX(" + w + "px)";
+    toggleRead(tc.id);                      // zeichnet die Liste neu -> Karte ist danach weg
   } else {
     tc.swipe.style.transform = "";
   }
   setTimeout(function(){ if(tc.swipe) tc.swipe.style.transition = ""; }, 220);
+}
+
+/* Löschen soll sich SOFORT anfühlen: Der Eintrag verschwindet gleich aus der Liste, der Server
+   folgt im Hintergrund (Apps Script braucht dafür oft mehrere Sekunden). Lehnt der Server ab,
+   kommt der Eintrag an seine alte Stelle zurück und die App sagt Bescheid. */
+function loescheEintrag(id, forKind){
+  var k = forKind || kind;
+  if(entfernePlatzhalter(id)) return Promise.resolve(true);   // war noch gar nicht abgeschickt
+  stoppeVorlesen(id);
+  var arr = store[k].entries;
+  var pos = arr.findIndex(function(e){ return String(e.id)===String(id); });
+  if(pos < 0) return Promise.resolve(false);
+  var kopie = arr[pos];
+  arr.splice(pos, 1);
+  saveCache(k);
+  if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
+  return apiFor(k, { action:"delete", id:id }).then(function(res){
+    if(res && res.ok) return true;
+    throw new Error((res && res.error) || "Der Server hat abgelehnt.");
+  }).catch(function(err){
+    arr.splice(Math.min(pos, arr.length), 0, kopie);          // zurück an die alte Stelle
+    saveCache(k);
+    if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
+    toast("Nicht gelöscht (" + (err.message || "Serverfehler") + ") – der Eintrag ist wieder da.", "err");
+    return false;
+  });
 }
 
 /* Wird ein Beitrag entfernt, aus dem gerade vorgelesen wird, muss die Stimme verstummen –
@@ -2175,24 +2277,42 @@ function exitSelectionMode(){
 }
 function updateSelBar(){ $("selCount").textContent = Object.keys(S().selected).length + " ausgewählt"; }
 $("selCancel").onclick = function(){ exitSelectionMode(); };
+$("selAll").onclick = function(){
+  var sichtbar = sichtbareEintraege();
+  S().selected = {};
+  sichtbar.forEach(function(e){ S().selected[e.id] = true; });
+  if(!sichtbar.length){ toast("Hier ist gerade nichts zum Auswählen."); return; }
+  render(); updateSelBar();
+};
+$("selNone").onclick = function(){
+  S().selected = {};
+  render(); updateSelBar();          // Auswahlmodus bleibt an, damit man neu wählen kann
+};
+$("selArchive").onclick = function(){
+  var ids = Object.keys(S().selected);
+  if(!ids.length){ toast("Nichts ausgewählt."); return; }
+  // Alle in dieselbe Richtung schalten: Richtet sich danach, was mehrheitlich ausgewählt ist
+  var offen = ids.filter(function(id){
+    var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+    return e && !e.read;
+  });
+  var insArchiv = offen.length > 0;
+  var k = kind, betroffen = insArchiv ? offen : ids;
+  toast(betroffen.length + (insArchiv ? " ins Archiv." : " zurück in der Liste."), "ok");
+  exitSelectionMode();
+  betroffen.forEach(function(id){ setzeGelesen(id, insArchiv, k); });
+};
 $("selDelete").onclick = function(){
   var ids = Object.keys(S().selected);
   if(!ids.length) return;
   var ui = KIND_UI[kind];
   if(!confirm(ids.length + " " + (ids.length===1?ui.noun1:ui.nounN) + " wirklich löschen?")) return;
-  var chain = Promise.resolve(), geschafft = 0;
+  var k = kind;
+  toast(ids.length + " gelöscht.", "ok");
+  exitSelectionMode();                       // Liste ist sofort frei – der Server folgt
+  var chain = Promise.resolve();
   ids.forEach(function(id){
-    chain = chain.then(function(){
-      stoppeVorlesen(id);
-      return api({ action:"delete", id:id })
-        .then(function(res){ if(res && res.ok) geschafft++; })
-        .catch(function(){});
-    });
-  });
-  chain.then(function(){
-    if(geschafft === ids.length) toast(geschafft + " gelöscht.", "ok");
-    else toast(geschafft + " von " + ids.length + " gelöscht – der Rest hat nicht geklappt.", "err");
-    exitSelectionMode(); refresh();
+    chain = chain.then(function(){ return loescheEintrag(id, k); });
   });
 };
 
