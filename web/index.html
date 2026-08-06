@@ -294,8 +294,8 @@
   <div class="hrow">
     <span class="logo" id="logo">🎬</span>
     <h1>Zusammenfassungen</h1>
-    <button class="iconbtn" id="refreshBtn" title="Aktualisieren">↻</button>
-    <button class="iconbtn" id="settingsBtn" title="Einstellungen">⚙️</button>
+    <button class="iconbtn" id="refreshBtn" title="Aktualisieren" aria-label="Aktualisieren">↻</button>
+    <button class="iconbtn" id="settingsBtn" title="Einstellungen" aria-label="Einstellungen">⚙️</button>
   </div>
   <div class="tabs" id="tabs">
     <button class="tab" data-kind="yt">🎬 <span class="tl">YouTube</span> <span class="cnt" id="cntYt"></span></button>
@@ -336,10 +336,10 @@
   </div>
 
   <div class="toolbar">
-    <div class="seg" id="segRead">
+    <div class="seg" id="segRead" role="group" aria-label="Filter: Alle, Offen oder Archiv">
       <button data-read="alle">Alle</button>
       <button data-read="offen">Offen</button>
-      <button data-read="gelesen">Gelesen</button>
+      <button data-read="gelesen">Archiv</button>
     </div>
     <select id="sortSel" title="Sortierung">
       <option value="neu">Neueste zuerst</option>
@@ -415,6 +415,15 @@
       <div class="help" id="notifyHelp" style="display:none"></div>
     </div>
     <div class="field">
+      <label style="display:flex; align-items:center; gap:9px; font-weight:600">
+        <input type="checkbox" id="cfgArchiv" style="width:auto; margin:0">
+        Vorgelesenes automatisch ins Archiv
+      </label>
+      <div class="help">Sobald die Kurzfassung (TL;DR + Kernaussagen) durch ist, wandert der
+        Beitrag ins Archiv. Er bleibt vollständig erhalten – unter „Archiv" kannst du ihn erneut
+        anhören, nachlesen oder mit „↩️ Zurück in die Liste" wieder hervorholen.</div>
+    </div>
+    <div class="field">
       <label>Sicherung der Zugangsdaten</label>
       <div class="modal btnrow" style="margin:0 0 6px">
         <button class="btn secondary" id="backupBtn">Sicherungscode zeigen</button>
@@ -438,12 +447,12 @@
 <!-- Auswahl-Werkzeugleiste (Mehrfachauswahl) -->
 <!-- Podcast-Leiste: liest mehrere Einträge nacheinander vor -->
 <div class="podbar" id="podbar">
-  <button class="podbtn" id="podPrev" title="Vorheriger">⏮</button>
-  <button class="podbtn primary" id="podPlay" title="Pause/Weiter">⏸️</button>
-  <button class="podbtn" id="podNext" title="Nächster">⏭</button>
+  <button class="podbtn" id="podPrev" title="Vorheriger" aria-label="Vorheriger Beitrag">⏮</button>
+  <button class="podbtn primary" id="podPlay" title="Pause/Weiter" aria-label="Pause oder weiter">⏸️</button>
+  <button class="podbtn" id="podNext" title="Nächster" aria-label="Nächster Beitrag">⏭</button>
   <div class="podtitle"><b id="podCount"></b><span id="podTitle"></span></div>
   <select class="podrate" id="podRate" title="Vorlese-Tempo"></select>
-  <button class="podbtn" id="podStop" title="Beenden">✕</button>
+  <button class="podbtn" id="podStop" title="Beenden" aria-label="Vorlesen beenden">✕</button>
 </div>
 
 <div class="selbar" id="selbar">
@@ -624,6 +633,9 @@ function tempoOptionen(){
    liefert eine fertige Audiodatei zurück – Satzmelodie und Kommapausen stimmen dadurch von selbst.
    Der Schlüssel liegt NUR lokal auf dem Gerät (nie im öffentlichen Repo), die Anfrage geht direkt
    vom Handy an Google. Gratis sind 4 Mio. Zeichen im Monat (WaveNet), danach 4 $ je Million. */
+var archivNachlauf = false;   // Beitrag wurde beim Vorlesen archiviert -> Liste danach auffrischen
+function autoArchivAn(){ return localStorage.getItem("auto_archiv") !== "0"; }
+
 var ttsAudio = null;          // ein einziges Audio-Element für alle Häppchen
 var ttsCache = {};            // Text -> Audiodaten, damit erneutes Hören nichts kostet
 var ttsCacheReihe = [];
@@ -790,6 +802,8 @@ function ttsStop(){
   if(TTS_OK){ try{ window.speechSynthesis.cancel(); }catch(e){} }
   if(ttsAudio){ try{ ttsAudio.pause(); ttsAudio.removeAttribute("src"); }catch(e){} }
   updateTtsBars();
+  // Wurde beim Vorlesen etwas ins Archiv gelegt, zieht die Liste jetzt nach
+  if(archivNachlauf){ archivNachlauf = false; S().lastSig = ""; render(); updateCounts(); }
 }
 
 function ttsSpeakNext(){
@@ -811,7 +825,8 @@ function ttsSpeakNext(){
   u.onend = function(){
     if(meineGen !== tts.gen || !tts.playing || tts.paused) return;
     tts.i++;
-    updateTtsBars();
+    pruefeArchivieren();
+    updateTtsProgress();
     ttsSpeakNext();
   };
   u.onerror = function(ev){
@@ -849,8 +864,15 @@ function spieleAudio(b64, meineGen){
   ttsAudio.onended = function(){
     if(meineGen !== tts.gen || !tts.playing || tts.paused) return;
     tts.i++;
-    updateTtsBars();
+    pruefeArchivieren();
+    updateTtsProgress();
     ttsSpeakNext();
+  };
+  // Laufende Prozentanzeige innerhalb des Häppchens
+  ttsAudio.ontimeupdate = function(){
+    if(meineGen !== tts.gen || !tts.playing) return;
+    updateTtsProgress();
+    pruefeArchivieren();       // greift schon mitten im Häppchen, sobald das TL;DR durch ist
   };
   ttsAudio.onerror = function(){
     if(meineGen !== tts.gen || !tts.playing) return;
@@ -864,20 +886,22 @@ function spieleAudio(b64, meineGen){
   ttsAudio.play().catch(function(){});
 }
 
-function ttsStart(id, mode, beiEnde){
+function ttsStart(id, mode, beiEnde, forKind){
   // Bricht etwas ab, im Podcast-Modus trotzdem weiterreichen – sonst bliebe er stehen
   var abbruch = function(text){ if(text) toast(text, "err"); if(beiEnde) beiEnde(); };
   if(!ttsMoeglich()){ abbruch("Dein Browser kann leider nicht vorlesen."); return; }
-  var e = S().entries.find(function(x){ return String(x.id)===String(id); });
+  var k = forKind || kind;
+  var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
   if(!e || e.status !== "done"){ abbruch("Erst wenn die Zusammenfassung fertig ist."); return; }
   if(!e.summary){ abbruch("Der Text ist noch nicht geladen – bitte kurz warten oder erneut laden."); return; }
-  var current = S().viewLang[id] || e.language || "Deutsch";
+  var current = store[k].viewLang[id] || e.language || "Deutsch";
   var md = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
   var raw = (mode === "short") ? shortPart(md) : md;
   var text = speakableText(raw, current);
   if(mode !== "short"){
     // Beim vollständigen Vorlesen auch Titel und (falls vorhanden) eigene Fragen mitnehmen
-    text = speakableText(e.title || "", current) + ". " + text;
+    // speakableText beendet den Titel bereits mit einem Punkt – kein zweiter davor
+    text = speakableText(e.title || "", current).replace(/\.+$/, ".") + " " + text;
     (e.qa||[]).forEach(function(x){
       text += " " + speakableText(x.q, current) + ". " + speakableText(x.a, current) + ".";
     });
@@ -892,8 +916,79 @@ function ttsStart(id, mode, beiEnde){
   tts.playing = true; tts.paused = false;
   tts.onEnd = beiEnde || null;
   tts.lang = LANG_CODE[current] || "de-DE";
+  tts.kind = k;                                // Bereich merken (Umschalten während des Vorlesens)
+  tts.laengen = laengenSumme(chunks);          // für die Fortschrittsanzeige
+  tts.archivZeichen = tldrEnde(text, current); // ab hier gilt das TL;DR als gehört
+  tts.archiviert = false;
   updateTtsBars();
   ttsSpeakNext();
+}
+
+/* ---- Fortschritt & automatisches Archivieren --------------------------- */
+/* Aufsummierte Zeichenlängen: damit misst sich der Fortschritt am Text, nicht an der Anzahl
+   der Häppchen. Bei der Cloud-Stimme gibt es nur wenige, große Häppchen – „50 %" kurz vor dem
+   Ende war schlicht falsch, weil das laufende Häppchen noch gar nicht mitzählte. */
+function laengenSumme(chunks){
+  var summe = [0];
+  for(var i=0;i<chunks.length;i++) summe.push(summe[i] + chunks[i].length);
+  return summe;
+}
+
+/* Ende des TL;DR-Teils im gesprochenen Text (Zeichenposition). */
+function tldrEnde(text, lang){
+  var wort = TLDR_SAY[lang] || TLDR_SAY["Deutsch"];
+  var p = text.indexOf(wort);
+  if(p < 0) return Math.min(text.length, 300);      // kein TL;DR erkennbar -> grober Richtwert
+  var ende = text.indexOf("\n", p);
+  return ende < 0 ? Math.min(text.length, p + 400) : ende;
+}
+
+/* Bereits gesprochene Zeichen – bei der Cloud-Stimme inklusive des laufenden Häppchens,
+   damit Fortschritt und Archivieren nicht erst am Häppchen-Ende springen. */
+function gesprocheneZeichen(){
+  var s = tts.laengen;
+  if(!s || !s.length) return 0;
+  var gesprochen = s[Math.min(tts.i, s.length-1)];
+  if(tts.engine === "cloud" && ttsAudio && ttsAudio.duration && tts.i < tts.chunks.length){
+    var anteil = ttsAudio.currentTime / ttsAudio.duration;
+    if(anteil > 0 && anteil <= 1) gesprochen += anteil * tts.chunks[tts.i].length;
+  }
+  return gesprochen;
+}
+
+/* Anteil des bereits gesprochenen Textes (0–100). */
+function ttsFortschritt(){
+  var s = tts.laengen;
+  if(!s || !s.length || !s[s.length-1]) return 0;
+  return Math.max(0, Math.min(100, Math.round(gesprocheneZeichen() / s[s.length-1] * 100)));
+}
+
+/* Nur die Prozentanzeige auffrischen – ohne die Leiste neu aufzubauen (sonst flackern die Knöpfe). */
+function updateTtsProgress(){
+  var txt = (tts.mode==="short"?"Kurzfassung":"Alles") + " · " + ttsFortschritt() + "%";
+  var bars = document.querySelectorAll('.ttsbar[data-id="'+CSS.escape(String(tts.id))+'"] .ttsprog');
+  for(var i=0;i<bars.length;i++) bars[i].textContent = txt;
+}
+
+/* Ist das TL;DR durch, wandert der Beitrag ins Archiv – genau das, was man beim Durchhören
+   erwartet: Gehörtes verschwindet aus „Offen", bleibt aber jederzeit abrufbar. */
+function pruefeArchivieren(){
+  if(tts.archiviert || !autoArchivAn() || !tts.playing) return;
+  if(gesprocheneZeichen() < (tts.archivZeichen || 0)) return;
+  tts.archiviert = true;
+  var id = tts.id, k = tts.kind || kind;
+  var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e || e.read || e._tmp) return;
+  e.read = true;
+  saveCache(k); store[k].lastSig = "";
+  // Die Liste erst nach dem Vorlesen neu zeichnen – sonst verschwindet die Karte,
+  // aus der gerade vorgelesen wird, mitten im Satz unter den Fingern weg.
+  archivNachlauf = true;
+  if(!podMode) toast("Gehört – ins Archiv verschoben ✓", "ok");
+  apiFor(k, { action:"read", id:id, value:"1" }).catch(function(){
+    e.read = false; saveCache(k); store[k].lastSig = "";
+    if(k === kind) render();
+  });
 }
 
 /* Pause selbst gebaut: Chrome auf Android ignoriert pause()/resume() der Sprachausgabe.
@@ -934,14 +1029,14 @@ function ttsAbbrechenOhneWeiter(){
 /* Liest alle gerade sichtbaren Einträge nacheinander vor – ideal fürs Auto.
    Ein stummer Ton hält die Medien-Sitzung offen, damit die Kopfhörer-/Sperrbildschirm-
    Tasten (Play/Pause/Weiter) funktionieren. */
-var podMode = false, podListe = [], podIndex = 0, podStumm = null;
+var podMode = false, podListe = [], podIndex = 0, podStumm = null, podKind = "yt";
 
 function podStart(){
   if(!ttsMoeglich()){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
   var liste = sichtbareEintraege().filter(function(e){ return e.status === "done"; });
   if(!liste.length){ toast("Nichts zum Vorlesen in der aktuellen Ansicht.", "err"); return; }
   podListe = liste.map(function(e){ return e.id; });
-  podIndex = 0; podMode = true;
+  podIndex = 0; podMode = true; podKind = kind;
   document.body.classList.add("podmode");
   updateToolbar();
   starteStummenTon();
@@ -963,15 +1058,15 @@ function podSpiele(){
   }
   var id = podListe[podIndex];
   $("podCount").textContent = (podIndex+1) + " von " + podListe.length + " · Kurzfassung";   // sofort umspringen
-  var vorab = S().entries.find(function(x){ return String(x.id)===String(id); });
+  var vorab = store[podKind].entries.find(function(x){ return String(x.id)===String(id); });
   $("podTitle").textContent = (vorab && vorab.title) || "wird geladen …";
-  ensureFull(id).then(function(e){
+  ensureFull(id, podKind).then(function(e){
     if(!podMode) return;
     if(!e || !e.summary){ podWeiter(); return; }
     podZeigeInfo(e);
     // Bewusst nur die Kurzfassung (TL;DR + Kernaussagen): Beim Durchlauf über viele Beiträge
     // will man einen Überblick. Die ausführliche Fassung gibt es je Beitrag über den eigenen Knopf.
-    ttsStart(id, "short", podWeiter);      // beim Ende automatisch weiter
+    ttsStart(id, "short", podWeiter, podKind);   // beim Ende automatisch weiter
   });
 }
 
@@ -996,7 +1091,7 @@ function podZeigeInfo(e){
       navigator.mediaSession.metadata = new MediaMetadata({
         title: e.title || "Zusammenfassung",
         artist: e.channel || e.source || "Zusammenfassungen",
-        album: KIND_UI[kind].logo + " " + (podIndex+1) + "/" + podListe.length,
+        album: KIND_UI[podKind].logo + " " + (podIndex+1) + "/" + podListe.length,
         artwork: e.thumbnail ? [{ src:e.thumbnail, sizes:"480x360", type:"image/jpeg" }]
                              : [{ src:"icons/icon-192.png", sizes:"192x192", type:"image/png" }]
       });
@@ -1060,7 +1155,7 @@ function ttsBarInner(id){
   var active = tts.playing && String(tts.id) === String(id);
   var tempo = '<select class="ttsrate" data-act="tts-rate" title="Vorlese-Tempo">'+tempoOptionen()+'</select>';
   if(active){
-    var pct = tts.chunks.length ? Math.min(100, Math.round(tts.i / tts.chunks.length * 100)) : 0;
+    var pct = ttsFortschritt();
     // Tempo bleibt auch während des Vorlesens sichtbar – es lässt sich mitten im Text ändern
     return '<button class="ttsbtn primary" data-act="tts-toggle">'+(tts.paused?"▶️ Weiter":"⏸️ Pause")+'</button>'+
            '<button class="ttsbtn" data-act="tts-stop">⏹️ Stopp</button>'+ tempo +
@@ -1135,7 +1230,9 @@ function render(){
   if(!shown.length){
     var grund = S().search ? ('Keine Treffer für „'+esc(S().search)+'".')
               : (S().tagFilter ? ('Nichts unter „'+esc(S().tagFilter)+'" in diesem Zeitraum.')
-              : (S().readFilter==="offen" ? "Alles gelesen 🎉" : "Nichts im gewählten Zeitraum."));
+              : (S().readFilter==="offen" ? "Alles gehört 🎉"
+              : (S().readFilter==="gelesen" ? "Das Archiv ist noch leer."
+              : "Nichts im gewählten Zeitraum.")));
     list.innerHTML = '<div class="empty"><div class="big">🔍</div>'+grund+'</div>';
     return;
   }
@@ -1259,7 +1356,7 @@ function commonBody(e, openLabel){
           '<select class="lang" data-act="translate" title="Sprache wechseln / übersetzen">'+
             '<option value="">🌐 Übersetzen…</option>'+langSel+'</select>' : '')+
       (st==="error" ? '<button class="chip" data-act="retry">🔄 Erneut versuchen</button>' : '')+
-      '<button class="chip" data-act="read">'+(e.read ? "↩️ Als offen markieren" : "✓ Erledigt")+'</button>'+
+      '<button class="chip" data-act="read">'+(e.read ? "↩️ Zurück in die Liste" : "✓ Ins Archiv")+'</button>'+
       '<button class="chip danger" data-act="delete">🗑️ Löschen</button>'+
     '</div>'+
   '</div>';
@@ -1434,7 +1531,9 @@ function withPending(k, liste){
   return platzhalter.concat(liste);
 }
 
-function refresh(k){
+/* laut=true: vom Nutzer angestoßen (Knopf) – dann darf ein Fehler auch gemeldet werden.
+   Ohne laut läuft der Abruf im Hintergrund und bleibt bei Aussetzern still. */
+function refresh(k, laut){
   k = k || kind;
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
   return apiFor(k, { action:"list", light:1 }).then(function(res){
@@ -1461,6 +1560,7 @@ function refresh(k){
     // Hintergrund-Abruf: nicht mit einer Fehlermeldung stören, sondern still erneut versuchen.
     abrufFehler++;
     updateNotice();
+    if(laut) toast("Server gerade nicht erreichbar – ich versuche es weiter.", "err");
     if(k !== kind || wiederholung) return;      // nur eine Wiederholungskette, nur für die Ansicht
     wiederholung = setTimeout(function(){
       wiederholung = null;
@@ -1497,7 +1597,7 @@ function apiFor(k, params){
 /* Beim Start nur den sichtbaren Bereich laden – die anderen kommen beim Umschalten.
    So steht die App sofort bereit und Eingaben müssen nicht hinter Ladevorgängen warten. */
 function refreshActive(){ return refresh(kind); }
-function refreshAll(){ KINDS.forEach(function(k){ refresh(k); }); }
+function refreshAll(laut){ KINDS.forEach(function(k){ refresh(k, laut && k === kind); }); }
 
 function schedulePolling(){
   var busy = false;
@@ -1695,7 +1795,7 @@ function toggleRead(id){
   var neu = !e.read;
   e.read = neu;                       // sofort im Bild
   saveCache(kind); S().lastSig = ""; render();
-  toast(neu ? "Als erledigt markiert ✓" : "Wieder als offen markiert", "ok");
+  toast(neu ? "Ins Archiv verschoben ✓" : "Zurück in der Liste", "ok");
   api({ action:"read", id:id, value: neu ? "1" : "0" }).catch(function(){
     e.read = !neu; saveCache(kind); S().lastSig = ""; render();
     toast("Konnte nicht gespeichert werden.", "err");
@@ -1896,7 +1996,8 @@ $("list").addEventListener("click", function(ev){
     }
     return;
   }
-  var act = ev.target.getAttribute && ev.target.getAttribute("data-act");
+  var actEl = ev.target.closest ? ev.target.closest("[data-act]") : null;
+  var act = actEl ? actEl.getAttribute("data-act") : null;
   if(act === "read"){ toggleRead(id); return; }
   if(act === "reload"){
     var eR = S().entries.find(function(x){ return String(x.id)===String(id); });
@@ -1905,16 +2006,25 @@ $("list").addEventListener("click", function(ev){
     ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
     return;
   }
-  if(act === "tts-full"){ ttsStart(id, "full"); return; }
-  if(act === "tts-short"){ ttsStart(id, "short"); return; }
+  if(act === "tts-full" || act === "tts-short"){
+    if(podMode) podStop();          // sonst liefe der Durchlauf im Hintergrund weiter
+    ttsStart(id, act === "tts-short" ? "short" : "full");
+    return;
+  }
   if(act === "tts-toggle"){ ttsToggle(); return; }
-  if(act === "tts-stop"){ ttsStop(); return; }
+  if(act === "tts-stop"){ podMode ? podStop() : ttsStop(); return; }
   if(act === "delete"){
     if(!confirm("Diesen Eintrag wirklich löschen?")) return;
     if(entfernePlatzhalter(id)) return;   // noch nicht abgeschickt -> nur lokal entfernen
-    api({ action:"delete", id:id }).then(function(){ toast("Gelöscht.", "ok"); refresh(); });
+    api({ action:"delete", id:id }).then(function(res){
+      if(res && res.ok){ toast("Gelöscht.", "ok"); refresh(); }
+      else toast((res && res.error) || "Löschen hat nicht geklappt.", "err");
+    }).catch(function(err){ toast(err.message, "err"); });
   } else if(act === "retry"){
-    api({ action:"retry", id:id }).then(function(){ toast("Wird erneut versucht …", "ok"); refresh(); });
+    api({ action:"retry", id:id }).then(function(res){
+      if(res && res.ok){ toast("Wird erneut versucht …", "ok"); refresh(); }
+      else toast((res && res.error) || "Erneuter Versuch nicht möglich.", "err");
+    }).catch(function(err){ toast(err.message, "err"); });
   } else if(act === "ask"){
     submitQuestion(id, card.querySelector(".qain"));
   } else if(act === "copy"){
@@ -2103,6 +2213,7 @@ function openSettings(){
   $("cfgVoice").value = cfg.ttsVoice;
   $("cfgTtsKey").value = cfg.ttsKey;
   zeigeStimmenfeld();
+  $("cfgArchiv").checked = autoArchivAn();
   $("cfgNotify").checked = benachrichtigungenAktiv() && ("Notification" in window) && Notification.permission === "granted";
   // Zustand erklären: blockiert -> Anleitung, sonst ggf. Installations-Tipp
   if(!("Notification" in window)) zeigeNotifyHilfe(null);
@@ -2183,6 +2294,7 @@ $("saveBtn").onclick = function(){
   localStorage.setItem("cfg_lang", cfg.lang);
   localStorage.setItem("cfg_ttsvoice", cfg.ttsVoice);
   localStorage.setItem("cfg_ttskey", cfg.ttsKey);
+  localStorage.setItem("auto_archiv", $("cfgArchiv").checked ? "1" : "0");
   if(alteStimme !== cfg.ttsVoice){ ttsCache = {}; ttsCacheReihe = []; }
   closeSettings();
   updateNotice();
@@ -2288,7 +2400,7 @@ $("addBtn").onclick = function(){
   $("addInput").value = "";
   addMixed(v);
 };
-$("refreshBtn").onclick = function(){ toast("Aktualisiere …"); refreshAll(); };
+$("refreshBtn").onclick = function(){ toast("Aktualisiere …"); refreshAll(true); };
 $("scanBtn").onclick = function(){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var b = $("scanBtn"); b.disabled = true;

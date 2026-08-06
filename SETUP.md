@@ -294,6 +294,20 @@ So aktivierst du sie:
 
 ---
 
+## Vorlesen & Archiv
+
+- **„▶️ Alle vorlesen"** (oben rechts) liest von **jedem** Beitrag nur die Kurzfassung vor
+  (TL;DR + Kernaussagen). Für den ganzen Text gibt es in der Karte den Knopf „🔊 Alles vorlesen".
+- **Das Tempo** lässt sich jederzeit ändern – auch mitten im Vorlesen, sowohl in der Karte als auch
+  unten in der Vorleseleiste. Mit der Cloud-Stimme wirkt es sofort, bei der Gerätestimme ab dem
+  angefangenen Abschnitt. Pausieren und dann umstellen geht ebenfalls; es wird nicht von vorn begonnen.
+- **Automatisches Archiv:** Sobald das TL;DR durchgelesen ist, wandert der Beitrag ins Archiv
+  (Filter **Archiv** über der Liste). Nichts wird gelöscht – dort kannst du ihn erneut anhören,
+  nachlesen oder mit **„↩️ Zurück in die Liste"** wieder in „Offen" holen. Abschalten lässt sich das
+  in den Einstellungen unter *„Vorgelesenes automatisch ins Archiv"*.
+
+---
+
 ## Version prüfen & Zugangsdaten sichern
 
 Ganz unten in den **⚙️ Einstellungen** stehen die laufende **Version und ihr Datum**, daneben
