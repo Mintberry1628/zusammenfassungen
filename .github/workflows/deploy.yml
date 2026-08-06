@@ -27,6 +27,16 @@ jobs:
       - name: Dateien holen
         uses: actions/checkout@v4
 
+      # Traegt Versionskuerzel und Zeitstempel in die Dateien ein. Dadurch aendert sich der
+      # Service Worker bei jeder Veroeffentlichung (das Handy laedt die neue Fassung von selbst)
+      # und die App kann unten in den Einstellungen anzeigen, welche Version gerade laeuft.
+      - name: Version einstempeln
+        run: |
+          KURZ=$(git rev-parse --short HEAD)
+          STAND=$(TZ=Europe/Berlin date '+%d.%m.%Y %H:%M')
+          sed -i "s/__VERSION__/$KURZ/g; s/__BUILT__/$STAND/g" web/index.html web/service-worker.js
+          echo "Veroeffentlicht: $KURZ vom $STAND"
+
       - name: Pages vorbereiten
         uses: actions/configure-pages@v5
 

@@ -411,6 +411,7 @@
       <div class="help" id="notifyHelp" style="display:none"></div>
     </div>
     <div class="testline" id="testLine"></div>
+    <div class="help" id="versionLine" style="margin-top:10px"></div>
     <div class="btnrow">
       <button class="btn secondary" id="testBtn">Verbindung testen</button>
       <button class="btn" id="saveBtn">Speichern</button>
@@ -439,8 +440,21 @@
 <script>
 "use strict";
 
+/* ------------------------- Version & Aktualisierung ---------------------
+   Die beiden Platzhalter werden beim Veröffentlichen automatisch ersetzt (GitHub-Actions,
+   Schritt „Version einstempeln"). Lokal geöffnet bleiben sie stehen – dann zeigt die App
+   „Entwicklungsfassung“. Steht die Angabe in den Einstellungen, weißt du immer, welche
+   Fassung gerade läuft. */
+var APP_VERSION = "__VERSION__";
+var APP_BUILT   = "__BUILT__";
+function istEingestempelt(){ return APP_VERSION.charAt(0) !== "_"; }
+function versionText(){
+  return istEingestempelt() ? ("Version " + APP_VERSION + " · " + APP_BUILT)
+                            : "Entwicklungsfassung (noch nicht veröffentlicht)";
+}
+
 /* ----------------------------- Konfiguration ---------------------------- */
-var LANGS = ["Deutsch","Englisch","Französisch","Spanisch","Italienisch","Portugiesisch",
+var LANGS =["Deutsch","Englisch","Französisch","Spanisch","Italienisch","Portugiesisch",
   "Niederländisch","Türkisch","Polnisch","Russisch","Arabisch","Chinesisch","Japanisch","Koreanisch"];
 
 var cfg = {
@@ -2043,6 +2057,9 @@ function openSettings(){
           !(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)) zeigeNotifyHilfe("empfehlung");
   else zeigeNotifyHilfe(null);
   $("testLine").textContent = "";
+  $("versionLine").innerHTML = versionText() +
+    ' · <a href="#" id="updateLink">nach Aktualisierung suchen</a>';
+  $("updateLink").onclick = function(ev){ ev.preventDefault(); sucheAktualisierung(); };
   $("settingsOverlay").classList.add("show");
 }
 function closeSettings(){ $("settingsOverlay").classList.remove("show"); }
@@ -2216,7 +2233,39 @@ $("cfgNotify").addEventListener("change", function(){
 })();
 
 if("serviceWorker" in navigator){
-  window.addEventListener("load", function(){ navigator.serviceWorker.register("service-worker.js").catch(function(){}); });
+  var hatteController = !!navigator.serviceWorker.controller;
+  window.addEventListener("load", function(){
+    navigator.serviceWorker.register("service-worker.js").catch(function(){});
+  });
+  // Übernimmt ein neuer Service Worker, ist eine neue Fassung da -> einmal neu laden.
+  var ladeNeu = false;
+  navigator.serviceWorker.addEventListener("controllerchange", function(){
+    if(ladeNeu || !hatteController) return;       // beim allerersten Mal nicht neu laden
+    if(tts.playing){ toast("Neue Version bereit – wird beim nächsten Start aktiv."); return; }
+    ladeNeu = true;
+    location.reload();
+  });
+}
+
+/* Von Hand nachsehen (Knopf in den Einstellungen). */
+function sucheAktualisierung(){
+  var zeile = $("versionLine");
+  if(!("serviceWorker" in navigator)){ location.reload(); return; }
+  zeile.innerHTML = versionText() + " – <b>suche …</b>";
+  navigator.serviceWorker.getRegistration().then(function(reg){
+    if(!reg){ location.reload(); return; }
+    return reg.update().then(function(){
+      setTimeout(function(){
+        if(reg.installing || reg.waiting){
+          zeile.innerHTML = versionText() + " – <b>neue Version wird geladen …</b>";
+        } else {
+          zeile.innerHTML = versionText() + " – du hast bereits die neueste Version.";
+        }
+      }, 1200);
+    });
+  }).catch(function(){
+    zeile.innerHTML = versionText() + " – Prüfung nicht möglich (offline?).";
+  });
 }
 
 updateTabsUI();

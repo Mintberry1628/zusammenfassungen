@@ -1,6 +1,12 @@
 /* Service Worker – macht die App installierbar und offline-fähig.
-   Bei jeder neuen App-Version die Zahl erhöhen (v2 -> v3 ...), damit Handys die Änderung laden. */
-var CACHE = "ytz-v17";
+
+   VERSION wird beim Veröffentlichen automatisch durch den Commit-Kürzel ersetzt (siehe
+   .github/workflows/deploy.yml). Dadurch ändert sich diese Datei bei JEDER neuen Version, das
+   Handy erkennt die Aktualisierung von selbst und lädt sie – früher musste die Zahl von Hand
+   erhöht werden, und genau das wurde einmal vergessen: die App blieb dann für immer auf der
+   alten Fassung stehen, egal wie oft man sie neu startete. */
+var VERSION = "__VERSION__";
+var CACHE = "ytz-" + VERSION;
 var ASSETS = [
   "./",
   "./index.html",
@@ -25,20 +31,32 @@ self.addEventListener("activate", function (e) {
   );
 });
 
+/* Die App fragt nach der laufenden Version (für die Anzeige in den Einstellungen). */
+self.addEventListener("message", function (e) {
+  if (e.data === "version" && e.source) e.source.postMessage({ version: VERSION });
+});
+
 self.addEventListener("fetch", function (e) {
   var req = e.request;
   if (req.method !== "GET") return;
   var url = new URL(req.url);
 
-  // Navigationen (auch das Teilen-Ziel "./?url=…") immer mit der App-Shell beantworten.
+  // Navigationen (auch das Teilen-Ziel "./?url=…"): zuerst das Netz fragen, damit eine neue
+  // Version sofort ankommt; ohne Netz kommt die gespeicherte Fassung.
   if (req.mode === "navigate") {
     e.respondWith(
-      caches.match("./index.html").then(function (c) { return c || fetch(req); })
+      fetch(req).then(function (res) {
+        var copy = res.clone();
+        caches.open(CACHE).then(function (c) { c.put("./index.html", copy); });
+        return res;
+      }).catch(function () {
+        return caches.match("./index.html").then(function (c) { return c || Response.error(); });
+      })
     );
     return;
   }
 
-  // Externe Aufrufe (Apps Script, YouTube-Thumbnails) nicht abfangen.
+  // Externe Aufrufe (Apps Script, YouTube-Thumbnails, Sprachausgabe) nicht abfangen.
   if (url.origin !== location.origin) return;
 
   e.respondWith(
