@@ -276,6 +276,8 @@
   .podbtn{border:1px solid var(--line); background:var(--card2); color:var(--text); border-radius:10px;
     width:38px; height:38px; font-size:15px; cursor:pointer; flex:0 0 auto}
   .podbtn.primary{background:var(--accent); color:#fff; border-color:transparent}
+  .podrate{border:1px solid var(--line); background:var(--card2); color:var(--muted);
+    border-radius:10px; height:38px; padding:0 6px; font-size:12px; font-family:inherit; flex:0 0 auto}
 
   /* Suchleiste */
   .searchbar{margin-bottom:14px}
@@ -352,7 +354,8 @@
       <option value="90">Letzte 3 Monate</option>
     </select>
     <span class="spacer"></span>
-    <button class="playall" id="playAllBtn">▶️ Alle vorlesen</button>
+    <button class="playall" id="playAllBtn"
+            title="Liest von jedem Beitrag nur die Kurzfassung (TL;DR + Kernaussagen) vor">▶️ Alle vorlesen</button>
   </div>
 
   <div class="tagbar" id="tagbar"></div>
@@ -439,6 +442,7 @@
   <button class="podbtn primary" id="podPlay" title="Pause/Weiter">⏸️</button>
   <button class="podbtn" id="podNext" title="Nächster">⏭</button>
   <div class="podtitle"><b id="podCount"></b><span id="podTitle"></span></div>
+  <select class="podrate" id="podRate" title="Vorlese-Tempo"></select>
   <button class="podbtn" id="podStop" title="Beenden">✕</button>
 </div>
 
@@ -603,6 +607,15 @@ var TTS_OK = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in win
 var tts = { id:null, mode:null, chunks:[], i:0, playing:false, paused:false, lang:"de-DE", gen:0,
             engine:"device" };
 var ttsRate = parseFloat(localStorage.getItem("tts_rate") || "1") || 1;
+
+/* Tempo-Stufen – werden an zwei Stellen gebraucht (Karte und Podcast-Leiste), deshalb hier oben:
+   die Podcast-Leiste wird beim Laden gefüllt, bevor der Rest der Vorlese-Funktionen an der Reihe ist. */
+var TEMPI = [["0.8","langsam"],["1","normal"],["1.25","zügig"],["1.5","schnell"]];
+function tempoOptionen(){
+  return TEMPI.map(function(r){
+    return '<option value="'+r[0]+'"'+(parseFloat(r[0])===ttsRate?" selected":"")+'>'+r[1]+'</option>';
+  }).join("");
+}
 
 /* ---- Cloud-Stimme (Google WaveNet) --------------------------------------
    Grund für den Wechsel: die Gerätestimme klingt abgehackt, weil wir den Text in sehr kleine
@@ -949,14 +962,16 @@ function podSpiele(){
     toast("Alles vorgelesen 🎉", "ok"); podStop(); return;
   }
   var id = podListe[podIndex];
-  $("podCount").textContent = (podIndex+1) + " von " + podListe.length;   // sofort umspringen
+  $("podCount").textContent = (podIndex+1) + " von " + podListe.length + " · Kurzfassung";   // sofort umspringen
   var vorab = S().entries.find(function(x){ return String(x.id)===String(id); });
   $("podTitle").textContent = (vorab && vorab.title) || "wird geladen …";
   ensureFull(id).then(function(e){
     if(!podMode) return;
     if(!e || !e.summary){ podWeiter(); return; }
     podZeigeInfo(e);
-    ttsStart(id, "full", podWeiter);       // beim Ende automatisch weiter
+    // Bewusst nur die Kurzfassung (TL;DR + Kernaussagen): Beim Durchlauf über viele Beiträge
+    // will man einen Überblick. Die ausführliche Fassung gibt es je Beitrag über den eigenen Knopf.
+    ttsStart(id, "short", podWeiter);      // beim Ende automatisch weiter
   });
 }
 
@@ -973,7 +988,7 @@ function podZurueck(){
 }
 
 function podZeigeInfo(e){
-  $("podCount").textContent = (podIndex+1) + " von " + podListe.length;
+  $("podCount").textContent = (podIndex+1) + " von " + podListe.length + " · Kurzfassung";
   $("podTitle").textContent = e.title || "(ohne Titel)";
   $("podPlay").textContent = tts.paused ? "▶️" : "⏸️";
   if("mediaSession" in navigator){
@@ -1013,6 +1028,9 @@ $("podPlay").onclick = function(){ ttsToggle(); podPlayIcon(); };
 $("podNext").onclick = podWeiter;
 $("podPrev").onclick = podZurueck;
 $("podStop").onclick = podStop;
+$("podRate").innerHTML = tempoOptionen();
+$("podRate").value = String(ttsRate);
+$("podRate").onchange = function(){ setzeTempo(this.value); updateTtsBars(); };
 
 /* Nur die Vorlese-Leisten aktualisieren (nicht die ganze Liste neu zeichnen). */
 function updateTtsBars(){
@@ -1022,21 +1040,34 @@ function updateTtsBars(){
   }
 }
 
+/* Tempo umstellen – funktioniert auch mitten im Vorlesen. */
+function setzeTempo(wert){
+  ttsRate = parseFloat(wert) || 1;
+  localStorage.setItem("tts_rate", String(ttsRate));
+  var pr = $("podRate"); if(pr) pr.value = String(ttsRate);
+  if(tts.engine === "cloud"){
+    if(ttsAudio){ try{ ttsAudio.playbackRate = ttsRate; }catch(e){} }   // ohne Neuladen
+    return;
+  }
+  if(tts.playing && !tts.paused){    // Gerätestimme: am selben Häppchen neu ansetzen
+    ttsAbbrechenOhneWeiter();
+    ttsSpeakNext();
+  }
+}
+
 function ttsBarInner(id){
   if(!ttsMoeglich()) return '<span class="ttsnote">Vorlesen wird von diesem Browser nicht unterstützt.</span>';
   var active = tts.playing && String(tts.id) === String(id);
+  var tempo = '<select class="ttsrate" data-act="tts-rate" title="Vorlese-Tempo">'+tempoOptionen()+'</select>';
   if(active){
     var pct = tts.chunks.length ? Math.min(100, Math.round(tts.i / tts.chunks.length * 100)) : 0;
+    // Tempo bleibt auch während des Vorlesens sichtbar – es lässt sich mitten im Text ändern
     return '<button class="ttsbtn primary" data-act="tts-toggle">'+(tts.paused?"▶️ Weiter":"⏸️ Pause")+'</button>'+
-           '<button class="ttsbtn" data-act="tts-stop">⏹️ Stopp</button>'+
+           '<button class="ttsbtn" data-act="tts-stop">⏹️ Stopp</button>'+ tempo +
            '<span class="ttsprog">'+(tts.mode==="short"?"Kurzfassung":"Alles")+' · '+pct+'%</span>';
   }
-  var rate = [["0.8","langsam"],["1","normal"],["1.25","zügig"],["1.5","schnell"]].map(function(r){
-    return '<option value="'+r[0]+'"'+(parseFloat(r[0])===ttsRate?" selected":"")+'>'+r[1]+'</option>';
-  }).join("");
   return '<button class="ttsbtn primary" data-act="tts-full">🔊 Alles vorlesen</button>'+
-         '<button class="ttsbtn" data-act="tts-short">⚡ Nur Kurzfassung</button>'+
-         '<select class="ttsrate" data-act="tts-rate" title="Vorlese-Tempo">'+rate+'</select>';
+         '<button class="ttsbtn" data-act="tts-short">⚡ Nur Kurzfassung</button>'+ tempo;
 }
 
 if(TTS_OK && window.speechSynthesis.onvoiceschanged !== undefined){
@@ -2031,16 +2062,7 @@ function onPopState(){
 
 $("list").addEventListener("change", function(ev){
   if(ev.target.getAttribute("data-act") === "tts-rate"){
-    ttsRate = parseFloat(ev.target.value) || 1;
-    localStorage.setItem("tts_rate", String(ttsRate));
-    if(tts.engine === "cloud"){     // Audiodatei: Tempo lässt sich direkt ändern, ohne neu zu laden
-      if(ttsAudio){ try{ ttsAudio.playbackRate = ttsRate; }catch(e){} }
-      return;
-    }
-    if(tts.playing && !tts.paused){ // Tempo sofort übernehmen: an derselben Stelle neu ansetzen
-      ttsAbbrechenOhneWeiter();
-      ttsSpeakNext();                 // gleiche Stelle, neues Tempo
-    }
+    setzeTempo(ev.target.value);
     return;
   }
   if(ev.target.getAttribute("data-act") !== "translate") return;
