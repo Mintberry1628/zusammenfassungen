@@ -470,6 +470,11 @@ function versionText(){
 var LANGS =["Deutsch","Englisch","Französisch","Spanisch","Italienisch","Portugiesisch",
   "Niederländisch","Türkisch","Polnisch","Russisch","Arabisch","Chinesisch","Japanisch","Koreanisch"];
 
+/* Zählt aufeinanderfolgende Fehlversuche beim Abrufen. Ein einzelner Aussetzer ist normal
+   (Googles Server schläft ein, das Handy wechselt gerade das Netz) und wird still wiederholt –
+   erst wenn es mehrfach hintereinander scheitert, ist ein Hinweis berechtigt. */
+var abrufFehler = 0, wiederholung = null;
+
 /* Vorbelegung der Web-App-URL: Sie ist nicht geheim (ohne das Passwort kommt niemand an die
    Daten) und erspart nach einem Datenverlust das Abtippen. Eine eigene Eingabe hat Vorrang. */
 var STANDARD_ENDPOINT = "https://script.google.com/macros/s/" +
@@ -1403,6 +1408,7 @@ function refresh(k){
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
   return apiFor(k, { action:"list", light:1 }).then(function(res){
     if(res && res.ok){
+      if(abrufFehler){ abrufFehler = 0; updateNotice(); }
       pruefeFertig(k, res.entries || []);     // Benachrichtigung bei "fertig"
       store[k].entries = withPending(k, mergeCached(k, res.entries || []));
       saveCache(k);
@@ -1420,7 +1426,15 @@ function refresh(k){
       toast(res.error, "err");
     }
   }).catch(function(err){
-    if(err.message !== "NO_CONFIG") toast(err.message, "err");
+    if(err.message === "NO_CONFIG") return;
+    // Hintergrund-Abruf: nicht mit einer Fehlermeldung stören, sondern still erneut versuchen.
+    abrufFehler++;
+    updateNotice();
+    if(k !== kind || wiederholung) return;      // nur eine Wiederholungskette, nur für die Ansicht
+    wiederholung = setTimeout(function(){
+      wiederholung = null;
+      refresh(k);
+    }, abrufFehler <= 2 ? 4000 : 30000);
   });
 }
 
@@ -2193,6 +2207,12 @@ $("testBtn").onclick = function(){
 
 function updateNotice(){
   var n = $("notice");
+  if(cfg.endpoint && cfg.secret && abrufFehler >= 3){
+    n.innerHTML = "📡 Der Server ist gerade nicht erreichbar. Die App versucht es weiter – " +
+                  "angezeigt werden solange die zuletzt geladenen Einträge.";
+    n.classList.add("show");
+    return;
+  }
   if(!cfg.endpoint || !cfg.secret){
     n.innerHTML = "⚙️ Noch nicht verbunden. Tippe oben rechts auf das Zahnrad und trage Web-App-URL + Passwort ein. <a id='openCfg'>Jetzt einrichten</a>";
     n.classList.add("show");
