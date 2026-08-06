@@ -881,6 +881,20 @@ function spieleAudio(b64, meineGen){
   };
   // Tempo erst setzen, wenn die Datei geladen ist – sonst setzt Chrome es wieder auf 1 zurück
   ttsAudio.onloadedmetadata = function(){ try{ ttsAudio.playbackRate = ttsRate; }catch(e){} };
+  // Von außen angehalten (Sperrbildschirm, Kopfhörertaste, anderer Ton)? Dann muss die App das
+  // mitbekommen – sonst zeigt sie „Pause" an, obwohl nichts läuft (oder umgekehrt).
+  ttsAudio.onpause = null;                       // beim Häppchenwechsel nicht fälschlich auslösen
+  ttsAudio.onplaying = function(){
+    if(meineGen !== tts.gen) return;
+    ttsAudio.onpause = function(){
+      if(meineGen !== tts.gen || !tts.playing || tts.paused || ttsAudio.ended) return;
+      tts.paused = true; updateTtsBars(); if(podMode) podPlayIcon();
+    };
+  };
+  ttsAudio.onplay = function(){
+    if(meineGen !== tts.gen || !tts.playing || !tts.paused) return;
+    tts.paused = false; updateTtsBars(); if(podMode) podPlayIcon();
+  };
   ttsAudio.src = "data:audio/mpeg;base64," + b64;
   try{ ttsAudio.playbackRate = ttsRate; }catch(e){}
   ttsAudio.play().catch(function(){});
@@ -1030,6 +1044,9 @@ function ttsAbbrechenOhneWeiter(){
    Ein stummer Ton hält die Medien-Sitzung offen, damit die Kopfhörer-/Sperrbildschirm-
    Tasten (Play/Pause/Weiter) funktionieren. */
 var podMode = false, podListe = [], podIndex = 0, podStumm = null, podKind = "yt";
+/* Laufende Nummer des Durchlaufs: Tippt man schnell mehrmals auf „Weiter", darf eine spät
+   eintreffende Nachlade-Antwort nicht doch noch den alten Beitrag starten. */
+var podGen = 0;
 
 function podStart(){
   if(!ttsMoeglich()){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
@@ -1056,13 +1073,22 @@ function podSpiele(){
   if(podIndex >= podListe.length){
     toast("Alles vorgelesen 🎉", "ok"); podStop(); return;
   }
+  var meineGen = ++podGen;
+  // SOFORT still werden. Sonst lief der bisherige Beitrag weiter, während oben schon der
+  // nächste Titel stand – das Nachladen des nächsten Textes kann Sekunden dauern.
+  if(tts.playing) ttsStop();
   var id = podListe[podIndex];
-  $("podCount").textContent = (podIndex+1) + " von " + podListe.length + " · Kurzfassung";   // sofort umspringen
+  // Solange der Text noch geholt wird, ehrlich anzeigen statt scheinbar zu hängen
+  $("podCount").textContent = (podIndex+1) + " von " + podListe.length + " · lädt …";
   var vorab = store[podKind].entries.find(function(x){ return String(x.id)===String(id); });
   $("podTitle").textContent = (vorab && vorab.title) || "wird geladen …";
+  $("podPlay").textContent = "⏸️";
   ensureFull(id, podKind).then(function(e){
-    if(!podMode) return;
-    if(!e || !e.summary){ podWeiter(); return; }
+    if(!podMode || meineGen !== podGen) return;   // inzwischen weitergetippt
+    if(!e || !e.summary){
+      toast("„" + ((vorab && vorab.title) || "Beitrag") + "“ übersprungen – Text nicht ladbar.", "err");
+      podWeiter(); return;
+    }
     podZeigeInfo(e);
     // Bewusst nur die Kurzfassung (TL;DR + Kernaussagen): Beim Durchlauf über viele Beiträge
     // will man einen Überblick. Die ausführliche Fassung gibt es je Beitrag über den eigenen Knopf.
@@ -1078,6 +1104,7 @@ function podWeiter(){
 }
 function podZurueck(){
   if(!podMode) return;
+  // Innerhalb der ersten Sekunden zurück = an den Anfang des laufenden Beitrags
   podIndex = Math.max(0, podIndex - 1);
   podSpiele();
 }
@@ -1992,7 +2019,9 @@ $("list").addEventListener("click", function(ev){
     }
     else {
       delete S().openCards[id];
-      if(tts.playing && String(tts.id)===String(id)) ttsStop(); // zugeklappt = Vorlesen beenden
+      // Zugeklappt = Vorlesen beenden. Im Durchlauf-Modus aber NICHT: dort steuert die Leiste
+      // unten, was läuft – ein versehentliches Zuklappen darf den Durchlauf nicht abwürgen.
+      if(!podMode && tts.playing && String(tts.id)===String(id)) ttsStop();
     }
     return;
   }
@@ -2016,6 +2045,7 @@ $("list").addEventListener("click", function(ev){
   if(act === "delete"){
     if(!confirm("Diesen Eintrag wirklich löschen?")) return;
     if(entfernePlatzhalter(id)) return;   // noch nicht abgeschickt -> nur lokal entfernen
+    stoppeVorlesen(id);
     api({ action:"delete", id:id }).then(function(res){
       if(res && res.ok){ toast("Gelöscht.", "ok"); refresh(); }
       else toast((res && res.error) || "Löschen hat nicht geklappt.", "err");
@@ -2110,12 +2140,22 @@ function onTouchEnd(){
   if(-tc.dx > w * 0.45){
     tc.swipe.style.transform = "translateX(-" + w + "px)";
     if(entfernePlatzhalter(tc.id)) return;
-    api({ action:"delete", id:tc.id }).then(function(){ toast("Gelöscht.", "ok"); refresh(); })
-      .catch(function(err){ toast(err.message, "err"); tc.swipe.style.transform = ""; });
+    stoppeVorlesen(tc.id);
+    api({ action:"delete", id:tc.id }).then(function(res){
+      if(res && res.ok){ toast("Gelöscht.", "ok"); refresh(); }
+      else { toast((res && res.error) || "Löschen hat nicht geklappt.", "err"); tc.swipe.style.transform = ""; }
+    }).catch(function(err){ toast(err.message, "err"); tc.swipe.style.transform = ""; });
   } else {
     tc.swipe.style.transform = "";
   }
   setTimeout(function(){ if(tc.swipe) tc.swipe.style.transition = ""; }, 220);
+}
+
+/* Wird ein Beitrag entfernt, aus dem gerade vorgelesen wird, muss die Stimme verstummen –
+   sonst spricht die App über einen Eintrag, den es nicht mehr gibt. */
+function stoppeVorlesen(id){
+  if(!tts.playing || String(tts.id) !== String(id)) return;
+  if(podMode) podWeiter(); else ttsStop();
 }
 
 /* ---- Mehrfachauswahl ---- */
@@ -2140,9 +2180,20 @@ $("selDelete").onclick = function(){
   if(!ids.length) return;
   var ui = KIND_UI[kind];
   if(!confirm(ids.length + " " + (ids.length===1?ui.noun1:ui.nounN) + " wirklich löschen?")) return;
-  var chain = Promise.resolve();
-  ids.forEach(function(id){ chain = chain.then(function(){ return api({ action:"delete", id:id }).catch(function(){}); }); });
-  chain.then(function(){ toast(ids.length + " gelöscht.", "ok"); exitSelectionMode(); refresh(); });
+  var chain = Promise.resolve(), geschafft = 0;
+  ids.forEach(function(id){
+    chain = chain.then(function(){
+      stoppeVorlesen(id);
+      return api({ action:"delete", id:id })
+        .then(function(res){ if(res && res.ok) geschafft++; })
+        .catch(function(){});
+    });
+  });
+  chain.then(function(){
+    if(geschafft === ids.length) toast(geschafft + " gelöscht.", "ok");
+    else toast(geschafft + " von " + ids.length + " gelöscht – der Rest hat nicht geklappt.", "err");
+    exitSelectionMode(); refresh();
+  });
 };
 
 /* ---- Zurück-Taste (Android): Artikel zuklappen / Auswahl beenden / doppelt zum Verlassen ---- */
