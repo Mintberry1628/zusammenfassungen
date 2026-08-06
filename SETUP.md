@@ -294,6 +294,21 @@ So aktivierst du sie:
 
 ---
 
+## Version prüfen & Zugangsdaten sichern
+
+Ganz unten in den **⚙️ Einstellungen** stehen die laufende **Version und ihr Datum**, daneben
+*„nach Aktualisierung suchen"*. So siehst du jederzeit, ob du die neueste Fassung benutzt.
+Aktualisiert wird ab sofort automatisch – der Service Worker holt die Seite zuerst aus dem Netz
+und wird bei jeder Veröffentlichung neu eingestempelt.
+
+Ebenfalls in den Einstellungen: **„Sicherungscode zeigen"**. Der Code (beginnt mit `ZSF1:`) enthält
+URL, Passwort, Sprache und Stimm-Schlüssel. Einmal kopieren und in die Notizen-App legen – gehen
+die App-Daten je verloren (z. B. durch „Websitedaten löschen" oder ein neues Handy), stellst du mit
+*„Code einlesen"* alles in einem Schritt wieder her. Die Web-App-URL ist ohnehin vorbelegt, im
+Normalfall fehlt danach nur das Passwort.
+
+---
+
 ## Optional: Natürlichere Vorlese-Stimme (Google WaveNet)
 
 Die eingebaute Gerätestimme klingt abgehackt, weil der Text in sehr kleine Häppchen zerlegt werden

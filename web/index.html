@@ -178,8 +178,9 @@
   .modal p.desc{color:var(--muted); font-size:13.5px; margin:0 0 16px}
   .field{margin-bottom:14px}
   .field label{display:block; font-size:13px; font-weight:600; margin-bottom:5px}
-  .field input,.field select{width:100%; border:1px solid var(--line); background:var(--bg);
+  .field input,.field select,.field textarea{width:100%; border:1px solid var(--line); background:var(--bg);
     color:var(--text); border-radius:11px; padding:11px 12px; font-size:15px; font-family:inherit}
+  .field textarea{min-height:76px; resize:vertical; font-size:12px; word-break:break-all}
   .field .help{color:var(--muted); font-size:12px; margin-top:4px}
   .modal .btnrow{display:flex; gap:8px; margin-top:8px}
   .modal .btnrow .btn{flex:1}
@@ -410,6 +411,18 @@
         schließt (wegwischst), stoppt Android sie – dann kommt keine Meldung.</div>
       <div class="help" id="notifyHelp" style="display:none"></div>
     </div>
+    <div class="field">
+      <label>Sicherung der Zugangsdaten</label>
+      <div class="modal btnrow" style="margin:0 0 6px">
+        <button class="btn secondary" id="backupBtn">Sicherungscode zeigen</button>
+        <button class="btn secondary" id="restoreBtn">Code einlesen</button>
+      </div>
+      <textarea id="backupBox" style="display:none" placeholder="ZSF1:… hier einfügen"
+                autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
+      <div class="help">Der Code enthält URL, Passwort und Stimm-Schlüssel. Einmal kopieren und in
+        deine Notizen legen – falls die App-Daten je verloren gehen, stellst du damit alles in
+        einem Schritt wieder her.</div>
+    </div>
     <div class="testline" id="testLine"></div>
     <div class="help" id="versionLine" style="margin-top:10px"></div>
     <div class="btnrow">
@@ -457,8 +470,13 @@ function versionText(){
 var LANGS =["Deutsch","Englisch","Französisch","Spanisch","Italienisch","Portugiesisch",
   "Niederländisch","Türkisch","Polnisch","Russisch","Arabisch","Chinesisch","Japanisch","Koreanisch"];
 
+/* Vorbelegung der Web-App-URL: Sie ist nicht geheim (ohne das Passwort kommt niemand an die
+   Daten) und erspart nach einem Datenverlust das Abtippen. Eine eigene Eingabe hat Vorrang. */
+var STANDARD_ENDPOINT = "https://script.google.com/macros/s/" +
+  "AKfycbxqaZvPOYfiI89iezqD9KtKlS8BsbB86UKBK5cpiHhAJoWN6OV4_6zPbIEPD27tG8Im/exec";
+
 var cfg = {
-  endpoint: localStorage.getItem("cfg_endpoint") || localStorage.getItem("yt_endpoint") || "",
+  endpoint: localStorage.getItem("cfg_endpoint") || localStorage.getItem("yt_endpoint") || STANDARD_ENDPOINT,
   secret:   localStorage.getItem("cfg_secret")   || localStorage.getItem("yt_secret")   || "",
   lang:     localStorage.getItem("cfg_lang")     || localStorage.getItem("yt_lang")      || "Deutsch",
   ttsKey:   localStorage.getItem("cfg_ttskey")   || "",
@@ -2057,12 +2075,51 @@ function openSettings(){
           !(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)) zeigeNotifyHilfe("empfehlung");
   else zeigeNotifyHilfe(null);
   $("testLine").textContent = "";
+  $("backupBox").style.display = "none"; $("backupBox").value = "";
   $("versionLine").innerHTML = versionText() +
     ' · <a href="#" id="updateLink">nach Aktualisierung suchen</a>';
   $("updateLink").onclick = function(ev){ ev.preventDefault(); sucheAktualisierung(); };
   $("settingsOverlay").classList.add("show");
 }
 function closeSettings(){ $("settingsOverlay").classList.remove("show"); }
+
+/* ---- Sicherungscode: alle Zugangsdaten in einer Zeile zum Aufbewahren ----
+   Bewusst nur zum Kopieren – nichts davon verlässt das Gerät von selbst. */
+function baueSicherungscode(){
+  var daten = { e: $("cfgEndpoint").value.trim(), s: $("cfgSecret").value.trim(),
+                l: $("cfgLang").value, v: $("cfgVoice").value, k: $("cfgTtsKey").value.trim() };
+  return "ZSF1:" + btoa(unescape(encodeURIComponent(JSON.stringify(daten))));
+}
+
+$("backupBtn").onclick = function(){
+  var code = baueSicherungscode();
+  var box = $("backupBox");
+  box.style.display = ""; box.value = code;
+  box.focus(); box.select();
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(code)
+      .then(function(){ toast("Code kopiert – jetzt in deine Notizen einfügen.", "ok"); })
+      .catch(function(){ toast("Bitte den Code von Hand kopieren."); });
+  } else toast("Bitte den Code von Hand kopieren.");
+};
+
+$("restoreBtn").onclick = function(){
+  var box = $("backupBox");
+  if(box.style.display === "none"){ box.style.display = ""; box.value = ""; box.focus(); }
+  var code = box.value.trim().replace(/\s+/g, "");
+  if(!code){ toast("Code einfügen und nochmal auf „Code einlesen“ tippen."); return; }
+  if(code.indexOf("ZSF1:") !== 0){ toast("Das sieht nicht nach einem Sicherungscode aus.", "err"); return; }
+  var daten;
+  try{ daten = JSON.parse(decodeURIComponent(escape(atob(code.slice(5))))); }
+  catch(err){ toast("Der Code ist unvollständig oder beschädigt.", "err"); return; }
+  if(daten.e) $("cfgEndpoint").value = daten.e;
+  if(daten.s) $("cfgSecret").value = daten.s;
+  if(daten.l) $("cfgLang").value = daten.l;
+  $("cfgVoice").value = daten.v || "";
+  $("cfgTtsKey").value = daten.k || "";
+  zeigeStimmenfeld();
+  toast("Eingelesen – jetzt noch auf „Speichern“ tippen.", "ok");
+};
 
 /* Schlüsselfeld nur zeigen, wenn eine Cloud-Stimme gewählt ist – plus Verbrauchsanzeige. */
 function zeigeStimmenfeld(){
