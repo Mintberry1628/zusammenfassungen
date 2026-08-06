@@ -294,6 +294,33 @@ So aktivierst du sie:
 
 ---
 
+## Optional: Natürlichere Vorlese-Stimme (Google WaveNet)
+
+Die eingebaute Gerätestimme klingt abgehackt, weil der Text in sehr kleine Häppchen zerlegt werden
+muss (Android bricht lange Ausgaben sonst ab) – an jeder Schnittstelle entsteht eine Pause,
+manchmal mitten im Wort. Die Cloud-Stimme bekommt ganze Absätze am Stück, hält die Satzzeichen ein
+und klingt dadurch flüssig.
+
+1. **Cloud Text-to-Speech API aktivieren:**
+   <https://console.cloud.google.com/apis/library/texttospeech.googleapis.com> → **„Aktivieren"**
+   (dasselbe Projekt wie beim YouTube-Schlüssel geht). Ein aktives Abrechnungskonto muss hinterlegt
+   sein, auch für die Gratis-Nutzung.
+2. **Schlüssel:** APIs & Dienste → Anmeldedaten → API-Schlüssel. Am besten einen eigenen anlegen und
+   unter **„API-Einschränkungen"** auf *Cloud Text-to-Speech API* beschränken.
+3. In der App: **⚙️ Einstellungen → Vorlese-Stimme** auf *Google WaveNet – weiblich* oder
+   *männlich* stellen, Schlüssel einfügen, **Speichern**.
+
+**Kosten:** 4 Mio. Zeichen pro Monat gratis, danach 4 $ je weitere Million. Eine Zusammenfassung hat
+grob 4.000 Zeichen – gratis sind also rund **1.000 vorgelesene Zusammenfassungen im Monat**. Der
+Verbrauch steht in den Einstellungen unter der Stimmenauswahl. Schon gehörte Häppchen kommen aus
+dem Zwischenspeicher und kosten beim erneuten Anhören nichts.
+
+Der Schlüssel bleibt **nur auf dem Handy** (localStorage), genau wie das Passwort – er kommt nie ins
+öffentliche GitHub-Repo. Ohne Schlüssel oder ohne Netz liest die App automatisch mit der
+Gerätestimme weiter.
+
+---
+
 ## Neue Spalten in der Tabelle (nach einem Update)
 
 Wenn eine neue Version zusätzliche Infos speichert (Datum, Aufrufe, Likes, Kommentare, Fragen),

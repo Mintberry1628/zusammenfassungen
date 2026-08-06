@@ -383,6 +383,25 @@
       <div class="help">Pro Eintrag kannst du später jederzeit umschalten/übersetzen.</div>
     </div>
     <div class="field">
+      <label>Vorlese-Stimme</label>
+      <select id="cfgVoice">
+        <option value="">Gerätestimme (gratis, offline)</option>
+        <option value="FEMALE">Google WaveNet – weiblich</option>
+        <option value="MALE">Google WaveNet – männlich</option>
+      </select>
+      <div class="help">Die WaveNet-Stimmen klingen deutlich natürlicher und halten sich an die
+        Satzzeichen. Dafür braucht es einen Google-Cloud-Schlüssel mit aktivierter
+        <b>Cloud Text-to-Speech API</b>. Gratis sind 4 Mio. Zeichen im Monat – das reicht für
+        etwa 1000 Zusammenfassungen. <span id="ttsUsage"></span></div>
+    </div>
+    <div class="field" id="ttsKeyField" style="display:none">
+      <label>Google-Cloud-Schlüssel (nur für die Stimme)</label>
+      <input id="cfgTtsKey" type="text" placeholder="AIza…"
+             autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <div class="help">Bleibt nur auf diesem Gerät gespeichert und wird nirgendwo hochgeladen.
+        Am besten den Schlüssel in der Cloud-Konsole auf die Text-to-Speech API beschränken.</div>
+    </div>
+    <div class="field">
       <label style="display:flex; align-items:center; gap:9px; font-weight:600">
         <input type="checkbox" id="cfgNotify" style="width:auto; margin:0">
         Benachrichtigen, wenn eine Zusammenfassung fertig ist
@@ -427,7 +446,9 @@ var LANGS = ["Deutsch","Englisch","Französisch","Spanisch","Italienisch","Portu
 var cfg = {
   endpoint: localStorage.getItem("cfg_endpoint") || localStorage.getItem("yt_endpoint") || "",
   secret:   localStorage.getItem("cfg_secret")   || localStorage.getItem("yt_secret")   || "",
-  lang:     localStorage.getItem("cfg_lang")     || localStorage.getItem("yt_lang")      || "Deutsch"
+  lang:     localStorage.getItem("cfg_lang")     || localStorage.getItem("yt_lang")      || "Deutsch",
+  ttsKey:   localStorage.getItem("cfg_ttskey")   || "",
+  ttsVoice: localStorage.getItem("cfg_ttsvoice") || ""   // "" = Gerätestimme, sonst FEMALE/MALE
 };
 
 /* Zwei getrennte Datensätze (YouTube / News), jeder mit eigenem UI-Zustand. */
@@ -542,8 +563,103 @@ var LANG_CODE = { "Deutsch":"de-DE", "Englisch":"en-US", "Französisch":"fr-FR",
 var TTS_OK = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
 /* gen = laufende Nummer der Ausgabe. Jede abgebrochene Ausgabe erhöht sie, wodurch verspätete
    Rückmeldungen der alten Ausgabe eindeutig erkannt und ignoriert werden (kein Zeitfenster nötig). */
-var tts = { id:null, mode:null, chunks:[], i:0, playing:false, paused:false, lang:"de-DE", gen:0 };
+var tts = { id:null, mode:null, chunks:[], i:0, playing:false, paused:false, lang:"de-DE", gen:0,
+            engine:"device" };
 var ttsRate = parseFloat(localStorage.getItem("tts_rate") || "1") || 1;
+
+/* ---- Cloud-Stimme (Google WaveNet) --------------------------------------
+   Grund für den Wechsel: die Gerätestimme klingt abgehackt, weil wir den Text in sehr kleine
+   Häppchen schneiden müssen (Android bricht lange Ausgaben ab). An jeder Schnittstelle entsteht
+   eine unnatürliche Pause, manchmal mitten im Wort. Die Cloud-Stimme bekommt ganze Absätze und
+   liefert eine fertige Audiodatei zurück – Satzmelodie und Kommapausen stimmen dadurch von selbst.
+   Der Schlüssel liegt NUR lokal auf dem Gerät (nie im öffentlichen Repo), die Anfrage geht direkt
+   vom Handy an Google. Gratis sind 4 Mio. Zeichen im Monat (WaveNet), danach 4 $ je Million. */
+var ttsAudio = null;          // ein einziges Audio-Element für alle Häppchen
+var ttsCache = {};            // Text -> Audiodaten, damit erneutes Hören nichts kostet
+var ttsCacheReihe = [];
+
+function cloudAktiv(){ return !!(cfg.ttsKey && cfg.ttsVoice); }
+function ttsMoeglich(){ return TTS_OK || cloudAktiv(); }
+
+/* Verbrauch mitzählen – nur zur Anzeige in den Einstellungen, damit das Gratis-Kontingent
+   nicht unbemerkt aufgebraucht wird. */
+function ttsVerbrauch(plus){
+  var monat = new Date().toISOString().slice(0,7);
+  var d = {};
+  try{ d = JSON.parse(localStorage.getItem("tts_usage") || "{}"); }catch(e){}
+  if(d.monat !== monat) d = { monat:monat, zeichen:0 };
+  if(plus){ d.zeichen += plus; try{ localStorage.setItem("tts_usage", JSON.stringify(d)); }catch(e){} }
+  return d;
+}
+
+/* Passende WaveNet-Stimme für eine Sprache heraussuchen (einmalig, dann gemerkt). */
+function stimmeFuer(code){
+  var merkKey = "tts_voice_" + code + "_" + (cfg.ttsVoice || "FEMALE");
+  var gemerkt = localStorage.getItem(merkKey);
+  if(gemerkt !== null) return Promise.resolve(gemerkt);
+  return fetch("https://texttospeech.googleapis.com/v1/voices?languageCode=" +
+               encodeURIComponent(code) + "&key=" + encodeURIComponent(cfg.ttsKey))
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      var alle = (j && j.voices) || [];
+      var wave = alle.filter(function(v){ return /wavenet/i.test(v.name || ""); });
+      var passend = wave.filter(function(v){ return v.ssmlGender === (cfg.ttsVoice || "FEMALE"); });
+      var name = (passend[0] || wave[0] || {}).name || "";
+      try{ localStorage.setItem(merkKey, name); }catch(e){}
+      return name;
+    })
+    .catch(function(){ return ""; });   // ohne Namen wählt Google selbst eine Stimme
+}
+
+function ttsFehlertext(j){
+  var m = j && j.error && j.error.message ? String(j.error.message) : "unbekannter Fehler";
+  if(/API key not valid|API_KEY_INVALID/i.test(m)) return "Schlüssel ungültig";
+  if(/has not been used|disabled|SERVICE_DISABLED/i.test(m)) return "Text-to-Speech API im Projekt nicht aktiviert";
+  if(/quota|billing/i.test(m)) return "Kontingent/Abrechnung";
+  return m.slice(0, 120);
+}
+
+/* Ein Häppchen sprechen lassen – aus dem Zwischenspeicher, sonst von Google. */
+function holeAudio(text, code){
+  var schluessel = code + "|" + (cfg.ttsVoice||"") + "|" + text;
+  if(ttsCache[schluessel]) return Promise.resolve(ttsCache[schluessel]);
+  return stimmeFuer(code).then(function(name){
+    var stimme = name ? { languageCode:code, name:name }
+                      : { languageCode:code, ssmlGender: cfg.ttsVoice || "FEMALE" };
+    return fetch("https://texttospeech.googleapis.com/v1/text:synthesize?key=" +
+                 encodeURIComponent(cfg.ttsKey), {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ input:{ text:text }, voice:stimme,
+                             audioConfig:{ audioEncoding:"MP3" } })
+    });
+  }).then(function(r){
+    return r.json().then(function(j){
+      if(!r.ok) throw new Error(ttsFehlertext(j));
+      if(!j.audioContent) throw new Error("keine Audiodaten erhalten");
+      return j.audioContent;
+    });
+  }).then(function(b64){
+    ttsCache[schluessel] = b64;
+    ttsCacheReihe.push(schluessel);
+    while(ttsCacheReihe.length > 60){ delete ttsCache[ttsCacheReihe.shift()]; }
+    ttsVerbrauch(text.length);
+    return b64;
+  });
+}
+
+/* Für die Cloud-Stimme dürfen die Stücke viel größer sein (Google erlaubt 5000 Byte).
+   Geschnitten wird bevorzugt an Absätzen, sonst an Satzenden – nie mitten im Wort. */
+function ttsChunksCloud(text){
+  var saetze = String(text||"").split(/\n+/).join("\n").match(/[^.!?…\n]+[.!?…]*\n?|\n/g) || [];
+  var out = [], cur = "";
+  saetze.forEach(function(s){
+    if((cur + s).length > 1400){ if(cur.trim()) out.push(cur.trim()); cur = s; }
+    else cur += s;
+    while(cur.length > 1800){ out.push(cur.slice(0,1800).trim()); cur = cur.slice(1800); }
+  });
+  if(cur.trim()) out.push(cur.trim());
+  return out.filter(function(s){ return /[A-Za-zÀ-ÿ0-9]/.test(s); });
+}
 
 /* Einleitung für "TL;DR" je Sprache (sonst würde die Abkürzung buchstabiert). */
 var TLDR_SAY = { "Deutsch":"Kurz gesagt", "Englisch":"In short", "Französisch":"En bref",
@@ -622,6 +738,7 @@ function ttsStop(){
   tts.id = null; tts.mode = null; tts.chunks = []; tts.i = 0;
   tts.playing = false; tts.paused = false; tts.onEnd = null; tts.gen++;
   if(TTS_OK){ try{ window.speechSynthesis.cancel(); }catch(e){} }
+  if(ttsAudio){ try{ ttsAudio.pause(); ttsAudio.removeAttribute("src"); }catch(e){} }
   updateTtsBars();
 }
 
@@ -634,6 +751,7 @@ function ttsSpeakNext(){
     }
     return;
   }
+  if(tts.engine === "cloud"){ cloudSpeakNext(); return; }
   var u = new SpeechSynthesisUtterance(tts.chunks[tts.i]);
   u.lang = tts.lang;
   u.rate = ttsRate;
@@ -655,12 +773,54 @@ function ttsSpeakNext(){
   try{ window.speechSynthesis.speak(u); }catch(e){ ttsStop(); }
 }
 
+/* Cloud-Stimme: Häppchen holen, abspielen und das nächste schon im Voraus laden.
+   Geht dabei etwas schief (Schlüssel, Kontingent, kein Netz), lesen wir nahtlos mit der
+   Gerätestimme weiter – das Vorlesen bricht also nie ganz ab. */
+function cloudSpeakNext(){
+  var meineGen = tts.gen;
+  holeAudio(tts.chunks[tts.i], tts.lang).then(function(b64){
+    if(meineGen !== tts.gen || !tts.playing || tts.paused) return;
+    spieleAudio(b64, meineGen);
+    var naechstes = tts.chunks[tts.i + 1];
+    if(naechstes) holeAudio(naechstes, tts.lang).catch(function(){});   // Vorlauf, ohne Pause
+  }).catch(function(err){
+    if(meineGen !== tts.gen || !tts.playing) return;
+    if(!TTS_OK){ toast("Vorlesen nicht möglich: " + err.message, "err"); ttsStop(); return; }
+    toast("Cloud-Stimme nicht verfügbar (" + err.message + ") – weiter mit der Gerätestimme.", "err");
+    tts.engine = "device";
+    tts.chunks = ttsChunks(tts.chunks.slice(tts.i).join(" "));
+    tts.i = 0;
+    ttsSpeakNext();
+  });
+}
+
+function spieleAudio(b64, meineGen){
+  if(!ttsAudio){ ttsAudio = new Audio(); ttsAudio.preload = "auto"; }
+  ttsAudio.onended = function(){
+    if(meineGen !== tts.gen || !tts.playing || tts.paused) return;
+    tts.i++;
+    updateTtsBars();
+    ttsSpeakNext();
+  };
+  ttsAudio.onerror = function(){
+    if(meineGen !== tts.gen || !tts.playing) return;
+    tts.i++;
+    if(tts.i < tts.chunks.length) ttsSpeakNext(); else ttsStop();
+  };
+  // Tempo erst setzen, wenn die Datei geladen ist – sonst setzt Chrome es wieder auf 1 zurück
+  ttsAudio.onloadedmetadata = function(){ try{ ttsAudio.playbackRate = ttsRate; }catch(e){} };
+  ttsAudio.src = "data:audio/mpeg;base64," + b64;
+  try{ ttsAudio.playbackRate = ttsRate; }catch(e){}
+  ttsAudio.play().catch(function(){});
+}
+
 function ttsStart(id, mode, beiEnde){
   // Bricht etwas ab, im Podcast-Modus trotzdem weiterreichen – sonst bliebe er stehen
   var abbruch = function(text){ if(text) toast(text, "err"); if(beiEnde) beiEnde(); };
-  if(!TTS_OK){ abbruch("Dein Browser kann leider nicht vorlesen."); return; }
+  if(!ttsMoeglich()){ abbruch("Dein Browser kann leider nicht vorlesen."); return; }
   var e = S().entries.find(function(x){ return String(x.id)===String(id); });
   if(!e || e.status !== "done"){ abbruch("Erst wenn die Zusammenfassung fertig ist."); return; }
+  if(!e.summary){ abbruch("Der Text ist noch nicht geladen – bitte kurz warten oder erneut laden."); return; }
   var current = S().viewLang[id] || e.language || "Deutsch";
   var md = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
   var raw = (mode === "short") ? shortPart(md) : md;
@@ -672,10 +832,12 @@ function ttsStart(id, mode, beiEnde){
       text += " " + speakableText(x.q, current) + ". " + speakableText(x.a, current) + ".";
     });
   }
-  var chunks = ttsChunks(text);
+  tts.engine = cloudAktiv() ? "cloud" : "device";
+  var chunks = (tts.engine === "cloud") ? ttsChunksCloud(text) : ttsChunks(text);
   if(!chunks.length){ abbruch("Nichts zum Vorlesen gefunden."); return; }
   tts.gen++;                                   // alte Rückmeldungen entwerten
   try{ window.speechSynthesis.cancel(); }catch(err){}
+  if(ttsAudio){ try{ ttsAudio.pause(); }catch(err){} }
   tts.id = id; tts.mode = mode; tts.chunks = chunks; tts.i = 0;
   tts.playing = true; tts.paused = false;
   tts.onEnd = beiEnde || null;
@@ -688,6 +850,17 @@ function ttsStart(id, mode, beiEnde){
    Wir brechen stattdessen ab und setzen beim Weiterspielen am selben Häppchen wieder an. */
 function ttsToggle(){
   if(!tts.playing) return;
+  if(tts.engine === "cloud"){
+    // Echte Audiodatei: hier funktioniert Pause/Weiter ganz normal, ohne Neuansetzen
+    tts.paused = !tts.paused;
+    if(ttsAudio){
+      if(tts.paused){ try{ ttsAudio.pause(); }catch(e){} }
+      else ttsAudio.play().catch(function(){});
+    }
+    updateTtsBars();
+    if(podMode) podPlayIcon();
+    return;
+  }
   if(tts.paused){
     tts.paused = false;
     ttsSpeakNext();                       // ab dem angefangenen Satz erneut
@@ -704,6 +877,7 @@ function ttsToggle(){
 function ttsAbbrechenOhneWeiter(){
   tts.gen++;
   try{ window.speechSynthesis.cancel(); }catch(e){}
+  if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
 }
 
 /* ---------------------------- Podcast-Modus ----------------------------- */
@@ -713,7 +887,7 @@ function ttsAbbrechenOhneWeiter(){
 var podMode = false, podListe = [], podIndex = 0, podStumm = null;
 
 function podStart(){
-  if(!TTS_OK){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
+  if(!ttsMoeglich()){ toast("Dein Browser kann leider nicht vorlesen.", "err"); return; }
   var liste = sichtbareEintraege().filter(function(e){ return e.status === "done"; });
   if(!liste.length){ toast("Nichts zum Vorlesen in der aktuellen Ansicht.", "err"); return; }
   podListe = liste.map(function(e){ return e.id; });
@@ -812,7 +986,7 @@ function updateTtsBars(){
 }
 
 function ttsBarInner(id){
-  if(!TTS_OK) return '<span class="ttsnote">Vorlesen wird von diesem Browser nicht unterstützt.</span>';
+  if(!ttsMoeglich()) return '<span class="ttsnote">Vorlesen wird von diesem Browser nicht unterstützt.</span>';
   var active = tts.playing && String(tts.id) === String(id);
   if(active){
     var pct = tts.chunks.length ? Math.min(100, Math.round(tts.i / tts.chunks.length * 100)) : 0;
@@ -996,7 +1170,9 @@ function commonBody(e, openLabel){
   if(st === "error"){
     bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>';
   } else if(st === "done" && !e.summary){
-    bodyInner = '<p style="color:var(--muted)"><span class="spin"></span> Text wird geladen …</p>';
+    bodyInner = e._ladefehler
+      ? '<div class="errbox">Text konnte nicht geladen werden: '+esc(e._ladefehler)+'</div>'
+      : '<p style="color:var(--muted)"><span class="spin"></span> Text wird geladen …</p>';
   } else if(st === "done"){
     var current = S().viewLang[e.id] || e.language || "Deutsch";
     var text = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
@@ -1009,7 +1185,9 @@ function commonBody(e, openLabel){
     bodyInner+
     '<div class="actions">'+
       '<a class="chip" href="'+esc(e.url)+'" target="_blank" rel="noopener">'+openLabel+'</a>'+
-      (st==="done" ? '<button class="chip" data-act="copy">📋 Kopieren</button>'+
+      (st==="done" && !e.summary ? '<button class="chip" data-act="reload">🔄 Text erneut laden</button>'+
+          '<button class="chip" data-act="retry">♻️ Neu zusammenfassen</button>' : '')+
+      (st==="done" && e.summary ? '<button class="chip" data-act="copy">📋 Kopieren</button>'+
           '<select class="lang" data-act="translate" title="Sprache wechseln / übersetzen">'+
             '<option value="">🌐 Übersetzen…</option>'+langSel+'</select>' : '')+
       (st==="error" ? '<button class="chip" data-act="retry">🔄 Erneut versuchen</button>' : '')+
@@ -1123,14 +1301,35 @@ function mergeCached(k, fresh){
   });
 }
 
-/* Holt den Volltext eines Eintrags nach (nur wenn er noch fehlt). */
-function ensureFull(id, forKind){
+/* Holt den Volltext eines Eintrags nach (nur wenn er noch fehlt).
+   Wichtig: Schlägt der Abruf fehl, wird das am Eintrag vermerkt (_ladefehler) und in der Karte
+   angezeigt. Früher blieb bei einem Fehler für immer „Text wird geladen …" stehen – ohne Hinweis
+   und ohne neuen Versuch. Häufigste Ursache: Apps Script bearbeitet gerade im Hintergrund ein
+   Video und beantwortet parallele Anfragen erst nach Minuten (Zeitüberschreitung). */
+function ensureFull(id, forKind, zweiterVersuch){
   var k = forKind || kind;
   var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
   if(!e) return Promise.resolve(null);
   if(e.summary || e.status !== "done") return Promise.resolve(e);
+
+  function merken(text){
+    var akt = store[k].entries.find(function(x){ return String(x.id)===String(id); });
+    if(akt) akt._ladefehler = text;
+    if(k === kind){ store[k].lastSig = ""; render(); reopen(id); }
+    return akt || e;
+  }
+  function nochmal(text){
+    if(zweiterVersuch) return merken(text);
+    return new Promise(function(res){ setTimeout(res, 2500); })
+      .then(function(){ return ensureFull(id, k, true); });
+  }
+
   return apiFor(k, { action:"get", id:id }).then(function(res){
     if(res && res.ok && res.entry){
+      if(res.entry.status === "done" && !res.entry.summary){
+        return merken("Der Eintrag ist als fertig gespeichert, enthält aber keinen Text. " +
+                      "Am besten unten neu zusammenfassen lassen.");
+      }
       var i = store[k].entries.findIndex(function(x){ return String(x.id)===String(id); });
       if(i >= 0){
         store[k].entries[i] = res.entry;
@@ -1138,8 +1337,10 @@ function ensureFull(id, forKind){
       }
       return res.entry;
     }
-    return e;
-  }).catch(function(){ return e; });
+    return nochmal((res && res.error) || "Der Server hat keinen Text zurückgegeben.");
+  }).catch(function(err){
+    return nochmal(err && err.message ? err.message : "Netzwerkfehler beim Nachladen.");
+  });
 }
 
 /* Zwischenspeicher schreiben – bei Platzmangel die ältesten Volltexte opfern. */
@@ -1620,6 +1821,13 @@ $("list").addEventListener("click", function(ev){
   }
   var act = ev.target.getAttribute && ev.target.getAttribute("data-act");
   if(act === "read"){ toggleRead(id); return; }
+  if(act === "reload"){
+    var eR = S().entries.find(function(x){ return String(x.id)===String(id); });
+    if(eR) delete eR._ladefehler;
+    S().lastSig=""; render(); reopen(id);
+    ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
+    return;
+  }
   if(act === "tts-full"){ ttsStart(id, "full"); return; }
   if(act === "tts-short"){ ttsStart(id, "short"); return; }
   if(act === "tts-toggle"){ ttsToggle(); return; }
@@ -1779,6 +1987,10 @@ $("list").addEventListener("change", function(ev){
   if(ev.target.getAttribute("data-act") === "tts-rate"){
     ttsRate = parseFloat(ev.target.value) || 1;
     localStorage.setItem("tts_rate", String(ttsRate));
+    if(tts.engine === "cloud"){     // Audiodatei: Tempo lässt sich direkt ändern, ohne neu zu laden
+      if(ttsAudio){ try{ ttsAudio.playbackRate = ttsRate; }catch(e){} }
+      return;
+    }
     if(tts.playing && !tts.paused){ // Tempo sofort übernehmen: an derselben Stelle neu ansetzen
       ttsAbbrechenOhneWeiter();
       ttsSpeakNext();                 // gleiche Stelle, neues Tempo
@@ -1820,6 +2032,9 @@ function openSettings(){
   $("cfgEndpoint").value = cfg.endpoint;
   $("cfgSecret").value = cfg.secret;
   $("cfgLang").value = cfg.lang;
+  $("cfgVoice").value = cfg.ttsVoice;
+  $("cfgTtsKey").value = cfg.ttsKey;
+  zeigeStimmenfeld();
   $("cfgNotify").checked = benachrichtigungenAktiv() && ("Notification" in window) && Notification.permission === "granted";
   // Zustand erklären: blockiert -> Anleitung, sonst ggf. Installations-Tipp
   if(!("Notification" in window)) zeigeNotifyHilfe(null);
@@ -1832,6 +2047,17 @@ function openSettings(){
 }
 function closeSettings(){ $("settingsOverlay").classList.remove("show"); }
 
+/* Schlüsselfeld nur zeigen, wenn eine Cloud-Stimme gewählt ist – plus Verbrauchsanzeige. */
+function zeigeStimmenfeld(){
+  var an = !!$("cfgVoice").value;
+  $("ttsKeyField").style.display = an ? "" : "none";
+  var v = ttsVerbrauch(0);
+  $("ttsUsage").innerHTML = (an && v.zeichen)
+    ? "Diesen Monat verbraucht: <b>" + v.zeichen.toLocaleString("de-DE") + "</b> von 4.000.000 Zeichen."
+    : "";
+}
+$("cfgVoice").addEventListener("change", zeigeStimmenfeld);
+
 $("settingsBtn").onclick = openSettings;
 $("settingsOverlay").addEventListener("click", function(ev){ if(ev.target.id==="settingsOverlay") closeSettings(); });
 
@@ -1839,9 +2065,15 @@ $("saveBtn").onclick = function(){
   cfg.endpoint = $("cfgEndpoint").value.trim();
   cfg.secret   = $("cfgSecret").value.trim();
   cfg.lang     = $("cfgLang").value;
+  var alteStimme = cfg.ttsVoice;
+  cfg.ttsVoice = $("cfgVoice").value;
+  cfg.ttsKey   = $("cfgTtsKey").value.trim();
   localStorage.setItem("cfg_endpoint", cfg.endpoint);
   localStorage.setItem("cfg_secret", cfg.secret);
   localStorage.setItem("cfg_lang", cfg.lang);
+  localStorage.setItem("cfg_ttsvoice", cfg.ttsVoice);
+  localStorage.setItem("cfg_ttskey", cfg.ttsKey);
+  if(alteStimme !== cfg.ttsVoice){ ttsCache = {}; ttsCacheReihe = []; }
   closeSettings();
   updateNotice();
   toast("Gespeichert.", "ok");
