@@ -294,6 +294,28 @@ So aktivierst du sie:
 
 ---
 
+## Videos per YouTube-Playlist übernehmen (statt Teilen)
+
+Lege in YouTube **eine eigene Playlist mit dem Namen `Zusammenfassen`** an (App: bei einem Video
+auf „Speichern" → „Neue Playlist"). Jedes Video, das du dort hineinlegst, holt sich die App
+innerhalb einer Minute und entfernt es danach wieder aus der Playlist – wie das Gmail-Label.
+
+> Googles eigene Liste **„Später ansehen" funktioniert dafür nicht**: Google hat den Zugriff
+> darauf 2016 für alle Programme gesperrt. Deshalb die eigene Playlist.
+
+**Einmalig freischalten:** Der Zugriff auf deine Playlists ist eine neue Berechtigung. Öffne
+<https://script.google.com> → dein Projekt → wähle oben die Funktion **`setup`** → **Ausführen** →
+im Dialog die Berechtigung für YouTube bestätigen. Bis dahin bleibt die Funktion einfach inaktiv,
+alles andere läuft normal weiter.
+
+Der Knopf **📺 Playlist** im YouTube-Bereich schaut sofort nach, statt bis zur nächsten Minute zu warten.
+
+Nebeneffekt derselben Freigabe: **Upload-Datum, Aufrufe, Likes und Kommentarzahl** kommen jetzt
+direkt über dein Konto – der früher nötige `YT_API_KEY` entfällt. (**Dislikes gibt es nicht mehr**:
+YouTube hat sie im Dezember 2021 aus der Schnittstelle entfernt, auch für die eigenen Videos.)
+
+---
+
 ## Vorlesen & Archiv
 
 - **„▶️ Alle vorlesen"** (oben rechts) liest von **jedem** Beitrag nur die Kurzfassung vor
