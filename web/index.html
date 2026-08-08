@@ -207,7 +207,9 @@
   .card .delbg,.card .archbg{position:absolute; inset:0; color:#fff; display:flex;
     align-items:center; gap:6px; padding:0 22px; font-weight:700; font-size:14px}
   .card .delbg{background:var(--err); justify-content:flex-end}
-  .card .archbg{background:var(--ok); justify-content:flex-start}
+  .card .archbg{background:var(--ok); justify-content:flex-start; opacity:0}
+  .card.swipe-rechts .archbg{opacity:1}
+  .card.swipe-rechts .delbg{opacity:0}
   .card .swipe{position:relative; z-index:1; background:var(--card); touch-action:pan-y}
 
   /* Auswahlmodus */
@@ -315,6 +317,7 @@
     <textarea id="addInput"></textarea>
     <div class="row">
       <span class="hint" id="addHint"></span>
+      <button class="btn secondary" id="plScanBtn" style="display:none">📺 Playlist</button>
       <button class="btn" id="addBtn">Hinzufügen</button>
     </div>
   </div>
@@ -512,7 +515,8 @@ var cfg = {
 function mkState(cacheKey){
   return { entries: JSON.parse(localStorage.getItem(cacheKey)||"[]"),
     viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey,
-    readFilter:"alle", tagFilter:"", serverIds:null };
+    // Beim Start immer "Offen": Was schon gehört wurde, soll nicht wieder im Weg stehen.
+    readFilter:"offen", tagFilter:"", serverIds:null };
 }
 var sortMode = localStorage.getItem("sortMode") || "neu";
 var zeitFilter = parseInt(localStorage.getItem("zeitFilter")||"0", 10) || 0;
@@ -531,7 +535,7 @@ var suppressClickUntil = 0;
 
 var KIND_UI = {
   yt:   { logo:"🎬", placeholder:"YouTube-Link(s) hier einfügen – mehrere Links (eine Zeile pro Link) für Stapelverarbeitung",
-          hint:"Tipp: In YouTube auf „Teilen“ → diese App wählen.", open:"▶️ Auf YouTube", noun1:"Video", nounN:"Videos",
+          hint:"Teilen → diese App. Oder in YouTube zur Playlist „Zusammenfassen“ hinzufügen.", open:"▶️ Auf YouTube", noun1:"Video", nounN:"Videos",
           qtitle:"❓ Eigene Fragen zum Video", qph:"z. B. Was sind die 3 wichtigsten Punkte?" },
   news: { logo:"📰", placeholder:"Link(s) hier einfügen – mehrere Links (eine Zeile pro Link) für Stapelverarbeitung",
           hint:"Tipp: In Chrome auf „Teilen“ → diese App wählen.", open:"🔗 Seite öffnen", noun1:"Seite", nounN:"Seiten",
@@ -804,6 +808,7 @@ function pickVoice(code){
 }
 
 function ttsStop(){
+  archiviereVorgemerktes();          // erst jetzt wandert ein gehörter Beitrag ins Archiv
   tts.id = null; tts.mode = null; tts.chunks = []; tts.i = 0;
   tts.playing = false; tts.paused = false; tts.onEnd = null; tts.gen++;
   if(TTS_OK){ try{ window.speechSynthesis.cancel(); }catch(e){} }
@@ -930,6 +935,7 @@ function ttsStart(id, mode, beiEnde, forKind){
   tts.engine = cloudAktiv() ? "cloud" : "device";
   var chunks = (tts.engine === "cloud") ? ttsChunksCloud(text) : ttsChunks(text);
   if(!chunks.length){ abbruch("Nichts zum Vorlesen gefunden."); return; }
+  archiviereVorgemerktes();                    // vorheriger Beitrag war fertig gehört
   tts.gen++;                                   // alte Rückmeldungen entwerten
   try{ window.speechSynthesis.cancel(); }catch(err){}
   if(ttsAudio){ try{ ttsAudio.pause(); }catch(err){} }
@@ -996,14 +1002,20 @@ function updateTtsProgress(){
 function pruefeArchivieren(){
   if(tts.archiviert || !autoArchivAn() || !tts.playing) return;
   if(gesprocheneZeichen() < (tts.archivZeichen || 0)) return;
+  // Nur VORMERKEN. Verschoben wird erst, wenn dieser Beitrag zu Ende gelesen (oder beendet)
+  // ist – sonst wandert die Karte mitten im Vorlesen weg, z. B. beim nächsten Abgleich.
   tts.archiviert = true;
+}
+
+/* Wird beim Beenden des Vorlesens ausgeführt: jetzt darf verschoben werden. */
+function archiviereVorgemerktes(){
+  if(!tts.archiviert) return;
   var id = tts.id, k = tts.kind || kind;
+  tts.archiviert = false;
   var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
   if(!e || e.read || e._tmp) return;
   e.read = true;
   saveCache(k); store[k].lastSig = "";
-  // Die Liste erst nach dem Vorlesen neu zeichnen – sonst verschwindet die Karte,
-  // aus der gerade vorgelesen wird, mitten im Satz unter den Fingern weg.
   archivNachlauf = true;
   if(!podMode) toast("Gehört – ins Archiv verschoben ✓", "ok");
   apiFor(k, { action:"read", id:id, value:"1" }).catch(function(){
@@ -2052,6 +2064,7 @@ function updateTabsUI(){
   $("logo").textContent = KIND_UI[kind].logo;
   $("addInput").placeholder = KIND_UI[kind].placeholder;
   $("addHint").textContent = KIND_UI[kind].hint;
+  $("plScanBtn").style.display = (kind === "yt") ? "" : "none";
   KINDS.forEach(function(k){ document.body.classList.toggle("kind-"+k, k===kind); });
 }
 function switchKind(k){
@@ -2204,6 +2217,8 @@ function onTouchMove(ev){
     var breite = touch.card.offsetWidth;
     var tx = Math.max(-breite, Math.min(breite, touch.dx));
     touch.swipe.style.transform = "translateX(" + tx + "px)";
+    // Immer nur die Aktion zeigen, die dieser Richtung entspricht
+    touch.card.classList.toggle("swipe-rechts", touch.dx > 0);
   }
 }
 function onTouchEnd(){
@@ -2215,6 +2230,7 @@ function onTouchEnd(){
   var w = tc.card.offsetWidth;
   var genug = w * 0.4;
   tc.swipe.style.transition = "transform .2s";
+  setTimeout(function(){ if(tc.card) tc.card.classList.remove("swipe-rechts"); }, 220);
   if(-tc.dx > genug){                       // nach links: löschen
     tc.swipe.style.transform = "translateX(-" + w + "px)";
     loescheEintrag(tc.id);
@@ -2572,6 +2588,21 @@ $("addBtn").onclick = function(){
   addMixed(v);
 };
 $("refreshBtn").onclick = function(){ toast("Aktualisiere …"); refreshAll(true); };
+/* Sofort in der YouTube-Playlist nachsehen (sonst passiert das ohnehin jede Minute). */
+$("plScanBtn").onclick = function(){
+  if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
+  var b = $("plScanBtn"); b.disabled = true;
+  toast("Sehe in der Playlist nach …");
+  apiFor("yt", { action:"scan" }).then(function(res){
+    b.disabled = false;
+    if(res && res.ok){
+      toast(res.added ? (res.added + (res.added===1?" Video":" Videos") + " übernommen – wird jetzt zusammengefasst.")
+                      : "Nichts Neues in der Playlist.", res.added ? "ok" : undefined);
+      refresh("yt");
+    } else { toast((res&&res.error)||"Nachsehen fehlgeschlagen.", "err"); }
+  }).catch(function(err){ b.disabled = false; toast(err.message, "err"); });
+};
+
 $("scanBtn").onclick = function(){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var b = $("scanBtn"); b.disabled = true;
