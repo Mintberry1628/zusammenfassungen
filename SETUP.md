@@ -316,6 +316,30 @@ YouTube hat sie im Dezember 2021 aus der Schnittstelle entfernt, auch für die e
 
 ---
 
+## Wenn ein Video nicht ausgewertet werden darf
+
+Gemini holt sich das Video **selbst** von YouTube, ohne dein Konto. Bei Altersfreigabe,
+Ländersperre, nicht gelisteten oder privaten Videos kommt es deshalb nicht heran – das lässt sich
+nicht umgehen, auch nicht dadurch, dass du selbst über 18 bist. In der Karte steht dann der Grund
+im Klartext.
+
+**Ausweg: eigenen Text zusammenfassen lassen.** Auf jeder fehlgeschlagenen Karte gibt es den Knopf
+**📝 Eigener Text** – dort steht die Anleitung Schritt für Schritt, und der eingefügte Text ersetzt
+die Videoquelle. Der Eintrag behält Titel, Vorschaubild und Link; Vorlesen, Übersetzen und Fragen
+funktionieren danach ganz normal.
+
+So kommst du am Handy an das Transkript:
+1. Video in **Chrome** öffnen (nicht in der YouTube-App), ⋮ → **„Desktop-Website"** anhaken.
+2. Unter dem Video auf die **Beschreibung** tippen → **„Transkript anzeigen"**.
+3. Im Transkript ⋮ → **„Zeitstempel umschalten"**, dann bleibt nur der Text.
+4. Text markieren, kopieren, in der App einfügen → **„✨ Daraus zusammenfassen"**.
+
+**Beliebigen Text zusammenfassen:** Füge einfach längeren Text (ab 100 Zeichen) statt eines Links
+in das Eingabefeld ein – die App legt daraus automatisch einen Eintrag im Bereich 📰 an. Praktisch
+für Notizen, Protokolle oder kopierte Artikel.
+
+---
+
 ## Vorlesen & Archiv
 
 - **„▶️ Alle vorlesen"** (oben rechts) liest von **jedem** Beitrag nur die Kurzfassung vor

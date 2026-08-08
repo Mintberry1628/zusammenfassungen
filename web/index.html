@@ -229,6 +229,16 @@
   .selbar .cnt{flex:1 0 100%; order:-1; font-weight:600; font-size:13px; color:var(--muted)}
   .selbar .btn{flex:1; padding:10px 8px; font-size:14px; white-space:nowrap}
 
+  /* Eigenen Text einfügen (wenn Gemini das Video nicht auswerten darf) */
+  .textbox{margin-top:10px; background:var(--card2); border:1px solid var(--line);
+    border-radius:12px; padding:12px}
+  .textbox ol{margin:8px 0 10px 18px; padding:0; font-size:13px; color:var(--muted); line-height:1.55}
+  .textbox li{margin-bottom:4px}
+  .textbox textarea{width:100%; min-height:110px; border:1px solid var(--line); background:var(--bg);
+    color:var(--text); border-radius:10px; padding:10px; font-size:14px; font-family:inherit; resize:vertical}
+  .textbox .zeile{display:flex; align-items:center; gap:8px; margin-top:8px}
+  .textbox .zaehler{flex:1; font-size:12px; color:var(--muted)}
+
   /* Fragen zum Inhalt (Q&A) */
   .qa{border-top:1px solid var(--line); margin-top:12px; padding-top:12px}
   .qa .qtitle{font-size:13px; font-weight:700; color:var(--muted); margin-bottom:10px}
@@ -516,7 +526,7 @@ function mkState(cacheKey){
   return { entries: JSON.parse(localStorage.getItem(cacheKey)||"[]"),
     viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey,
     // Beim Start immer "Offen": Was schon gehört wurde, soll nicht wieder im Weg stehen.
-    readFilter:"offen", tagFilter:"", serverIds:null };
+    readFilter:"offen", tagFilter:"", serverIds:null, textOffen:{}, textDraft:{} };
 }
 var sortMode = localStorage.getItem("sortMode") || "neu";
 var zeitFilter = parseInt(localStorage.getItem("zeitFilter")||"0", 10) || 0;
@@ -1380,7 +1390,7 @@ function commonBody(e, openLabel){
   var langSel = LANGS.map(function(l){ return '<option value="'+l+'"'+(S().viewLang[e.id]===l?' selected':'')+'>'+l+'</option>'; }).join("");
   var bodyInner = "";
   if(st === "error"){
-    bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>';
+    bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>' + textHilfeHtml(e);
   } else if(st === "done" && !e.summary){
     bodyInner = e._ladefehler
       ? '<div class="errbox">Text konnte nicht geladen werden: '+esc(e._ladefehler)+'</div>'
@@ -1402,7 +1412,8 @@ function commonBody(e, openLabel){
       (st==="done" && e.summary ? '<button class="chip" data-act="copy">📋 Kopieren</button>'+
           '<select class="lang" data-act="translate" title="Sprache wechseln / übersetzen">'+
             '<option value="">🌐 Übersetzen…</option>'+langSel+'</select>' : '')+
-      (st==="error" ? '<button class="chip" data-act="retry">🔄 Erneut versuchen</button>' : '')+
+      (st==="error" ? '<button class="chip" data-act="retry">🔄 Erneut versuchen</button>'+
+          '<button class="chip" data-act="text">📝 Eigener Text</button>' : '')+
       '<button class="chip" data-act="read">'+(e.read ? "↩️ Zurück in die Liste" : "✓ Ins Archiv")+'</button>'+
       '<button class="chip danger" data-act="delete">🗑️ Löschen</button>'+
     '</div>'+
@@ -1477,6 +1488,32 @@ function newsCardHtml(e){
       '</div>'+
       commonBody(e, "🔗 Artikel öffnen")+
     '</div>'+
+  '</div>';
+}
+
+/* Anleitung + Eingabefeld für den Fall, dass Gemini das Video nicht auswerten durfte.
+   Bewusst mit konkreten Schritten – im entscheidenden Moment will man nicht suchen müssen. */
+function textHilfeHtml(e){
+  if(!S().textOffen[e.id]) return "";
+  var istVideo = (e.kind || kind) === "yt";
+  var schritte = istVideo
+    ? '<li>Video in <b>Chrome</b> öffnen (nicht in der YouTube-App) und im ⋮-Menü <b>„Desktop-Website"</b> anhaken.</li>'+
+      '<li>Unter dem Video auf die <b>Beschreibung</b> tippen → <b>„Transkript anzeigen"</b>.</li>'+
+      '<li>Im Transkript oben auf <b>⋮ → „Zeitstempel umschalten"</b> (dann bleibt nur der Text).</li>'+
+      '<li>Text <b>markieren und kopieren</b> – lange auf ein Wort drücken, dann die Markierung bis zum Ende ziehen.</li>'+
+      '<li>Hier unten <b>einfügen</b> und auf „Daraus zusammenfassen" tippen.</li>'
+    : '<li>Die Seite öffnen und den <b>Artikeltext markieren und kopieren</b>.</li>'+
+      '<li>Hier unten <b>einfügen</b> und auf „Daraus zusammenfassen" tippen.</li>';
+  return '<div class="textbox">'+
+    '<div style="font-weight:600; font-size:14px; margin-bottom:2px">📝 Mit eigenem Text zusammenfassen</div>'+
+    '<div class="help" style="color:var(--muted); font-size:12px">Wenn '+(istVideo?"das Video":"die Seite")+
+      ' nicht ausgewertet werden darf (Altersfreigabe, Ländersperre, nicht öffentlich), fasst Gemini '+
+      'stattdessen einen Text zusammen, den du selbst einfügst – Transkript, Artikeltext oder eigene Notizen.</div>'+
+    '<ol>'+schritte+'</ol>'+
+    '<textarea class="textin" placeholder="Text hier einfügen …">'+esc(S().textDraft[e.id]||"")+'</textarea>'+
+    '<div class="zeile"><span class="zaehler">'+((S().textDraft[e.id]||"").length)+' Zeichen (mindestens 100)</span>'+
+      '<button class="chip" data-act="textcancel">Abbrechen</button>'+
+      '<button class="chip primary" data-act="textgo">✨ Daraus zusammenfassen</button></div>'+
   '</div>';
 }
 
@@ -1708,7 +1745,12 @@ function sortLinks(text){
 /* Fügt gemischte Links hinzu und wechselt in den Bereich, in dem am meisten gelandet ist. */
 function addMixed(text){
   var s = sortLinks(text);
-  if(!s.total){ toast("Kein Link erkannt. Bitte eine vollständige Adresse einfügen (mit https://).", "err"); return; }
+  if(!s.total){
+    // Kein Link, aber ordentlich Text? Dann ist offensichtlich der Text selbst gemeint.
+    if(String(text||"").trim().length >= 100){ sendeTextAlsEintrag(text); return; }
+    toast("Kein Link erkannt. Füge eine Adresse (mit https://) oder einen längeren Text ein.", "err");
+    return;
+  }
   var target = s.yt.length >= s.news.length ? "yt" : "news";
   if(kind !== target) switchKind(target);
   if(s.yt.length && s.news.length){
@@ -2121,6 +2163,23 @@ $("list").addEventListener("click", function(ev){
   var actEl = ev.target.closest ? ev.target.closest("[data-act]") : null;
   var act = actEl ? actEl.getAttribute("data-act") : null;
   if(act === "read"){ toggleRead(id); return; }
+  if(act === "text"){
+    S().textOffen[id] = !S().textOffen[id];
+    S().lastSig=""; render(); reopen(id);
+    var feld = document.querySelector('.card[data-id="'+CSS.escape(String(id))+'"] .textin');
+    if(feld) feld.focus();
+    return;
+  }
+  if(act === "textcancel"){
+    delete S().textOffen[id];
+    S().lastSig=""; render(); reopen(id);
+    return;
+  }
+  if(act === "textgo"){
+    var box = card.querySelector(".textin");
+    sendeEigenenText(id, box ? box.value : "");
+    return;
+  }
   if(act === "reload"){
     var eR = S().entries.find(function(x){ return String(x.id)===String(id); });
     if(eR) delete eR._ladefehler;
@@ -2158,8 +2217,13 @@ $("list").addEventListener("click", function(ev){
 });
 
 $("list").addEventListener("input", function(ev){
-  if(ev.target.classList && ev.target.classList.contains("qain")){
-    var c = ev.target.closest(".card"); if(c) S().qaDraft[c.getAttribute("data-id")] = ev.target.value;
+  var c = ev.target.closest && ev.target.closest(".card");
+  if(!c) return;
+  if(ev.target.classList.contains("qain")){ S().qaDraft[c.getAttribute("data-id")] = ev.target.value; }
+  else if(ev.target.classList.contains("textin")){
+    S().textDraft[c.getAttribute("data-id")] = ev.target.value;
+    var z = c.querySelector(".zaehler");
+    if(z) z.textContent = ev.target.value.length + " Zeichen (mindestens 100)";
   }
 });
 $("list").addEventListener("keydown", function(ev){
@@ -2168,6 +2232,46 @@ $("list").addEventListener("keydown", function(ev){
     var c = ev.target.closest(".card"); if(c) submitQuestion(c.getAttribute("data-id"), ev.target);
   }
 });
+
+/* ---- Eigenen Text als Quelle schicken ----------------------------------
+   Transkripte sind zu lang für eine Adresszeile, deshalb geht das per POST. Die Antwort
+   darf der Browser dabei nicht lesen (fremde Domain), also prüfen wir das Ergebnis danach
+   über den normalen Abgleich – daran sieht man auch, ob es angekommen ist. */
+function postText(nutzlast){
+  return fetch(cfg.endpoint, {
+    method: "POST", mode: "no-cors",
+    headers: { "Content-Type": "text/plain;charset=UTF-8" },
+    body: JSON.stringify(Object.assign({ token: cfg.secret }, nutzlast))
+  });
+}
+
+function sendeEigenenText(id, text){
+  text = String(text || "").trim();
+  if(text.length < 100){ toast("Bitte mehr Text einfügen – mindestens 100 Zeichen.", "err"); return; }
+  var k = kind, e = S().entries.find(function(x){ return String(x.id)===String(id); });
+  if(!e) return;
+  // Sofort sichtbar: der Eintrag ist wieder in Arbeit
+  e.status = "pending"; e.error = ""; e.summary = "";
+  delete S().textOffen[id]; delete S().textDraft[id];
+  saveCache(k); S().lastSig = ""; render();
+  toast("Text übernommen – die Zusammenfassung entsteht jetzt.", "ok");
+  postText({ action:"usetext", kind:k, id:id, text:text })
+    .then(function(){ setTimeout(function(){ refresh(k); }, 4000); })
+    .catch(function(){ toast("Der Text konnte nicht gesendet werden.", "err"); });
+}
+
+/* Reiner Text ohne Link (z. B. eingefügte Notizen) wird ein eigener Eintrag im Bereich 📰. */
+function sendeTextAlsEintrag(text){
+  text = String(text || "").trim();
+  if(text.length < 100){ toast("Bitte mehr Text einfügen – mindestens 100 Zeichen.", "err"); return; }
+  var titel = text.split(String.fromCharCode(10))[0].slice(0, 90);
+  if(kind !== "news") switchKind("news");
+  $("addInput").value = "";
+  toast("Text übernommen – die Zusammenfassung entsteht jetzt.", "ok");
+  postText({ action:"addtext", kind:"news", text:text, title:titel })
+    .then(function(){ setTimeout(function(){ refresh("news"); }, 4000); })
+    .catch(function(){ toast("Der Text konnte nicht gesendet werden.", "err"); });
+}
 
 /* ---- Fragen zum Inhalt ---- */
 function submitQuestion(id, input){
