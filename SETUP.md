@@ -235,6 +235,41 @@ YouTube-Links nach 🎬 und alle anderen nach 📰 – auch bei gemischten Liste
     `'gemini-2.0-flash'` (oder ein aktuelleres Flash-Modell), speichern, neu bereitstellen
     (siehe „Ich habe den Code später geändert"), dann „Erneut versuchen".
 
+**Fehler: „Gemini-Fehler HTTP 403: The caller does not have permission".**
+Das ist **immer** der API-Schlüssel im Apps Script, nie das Video. Der Reihe nach prüfen:
+1. **Schlüssel eingeschränkt?** Öffne
+   [console.cloud.google.com → APIs & Dienste → Anmeldedaten](https://console.cloud.google.com/apis/credentials),
+   klicke den Schlüssel an. Steht bei **„Anwendungseinschränkungen"** etwas anderes als **„Keine"**
+   (z. B. HTTP-Verweis-URLs oder IP-Adressen), funktioniert er aus Apps Script heraus **nicht** –
+   auf **„Keine"** stellen und speichern.
+2. **API-Einschränkung?** Direkt darunter unter **„API-Einschränkungen"** muss die
+   **„Generative Language API"** erlaubt sein (oder „Schlüssel nicht einschränken").
+3. **API aktiviert?** [Generative Language API aktivieren](https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com)
+   – im **selben** Projekt, zu dem der Schlüssel gehört.
+4. Hilft nichts davon: unter [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+   einen **neuen Schlüssel** erzeugen, oben in `Code.gs` bei `GEMINI_KEY` eintragen, speichern,
+   in der App „Erneut versuchen".
+
+**Fehler: „Von Gemini abgelehnt (STOP)."**
+Gemini hat geantwortet, aber **keinen Text** mitgeschickt. Der häufigste Grund ist hausgemacht:
+`gemini-2.5-flash` denkt vor der Antwort nach, und diese Denk-Schritte zählen gegen
+`maxOutputTokens`. Ist das Limit knapp, ist das Kontingent nach dem Nachdenken aufgebraucht –
+die Antwort bleibt leer, `finishReason` ist trotzdem `STOP`. Abhilfe in `apps-script/Code.gs`,
+im `generationConfig` des Gemini-Aufrufs:
+
+```js
+generationConfig: {
+  temperature: 0.3,
+  maxOutputTokens: 8192,          // großzügig, nicht 1024/2048
+  thinkingConfig: { thinkingBudget: 0 }   // schaltet das Vordenken ab
+}
+```
+
+Danach speichern und in der App „Erneut versuchen". Die App startet bei diesem Fehler
+inzwischen **einmal automatisch** einen zweiten Versuch – bleibt es dabei, liegt es an einer der
+anderen Ursachen: Video über ~90 Minuten, Altersfreigabe, Ländersperre oder nicht öffentlich.
+Dann hilft der Weg über **„📝 Eigener Text"** in der Karte (Transkript einfügen).
+
 **Video bleibt lange bei ⏳ / „wird zusammengefasst".**
 - Normal sind ein paar Minuten. Es wird **ein Video pro Minute** verarbeitet (so bleibt jeder
   Lauf sicher unter dem 6-Minuten-Limit von Apps Script). Tippe oben auf **↻** zum Aktualisieren.

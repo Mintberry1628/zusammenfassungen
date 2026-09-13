@@ -25,6 +25,9 @@
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
+  /* Die eigene "Runterziehen zum Aktualisieren"-Geste uebernimmt – sonst greift die des
+     Browsers und die laedt nur die Seite neu, statt die Liste vom Server zu holen. */
+  html,body{overscroll-behavior-y:contain}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     background:var(--bg); color:var(--text); line-height:1.5;
@@ -154,6 +157,19 @@
 
   .errbox{background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.3);
     color:var(--err); padding:10px 12px; border-radius:10px; font-size:13.5px; margin:4px 0 10px}
+  .errbox .errtipp{margin-top:6px; color:var(--text); font-weight:400; line-height:1.45}
+  .errbox .errroh{margin-top:7px; font-size:11.5px; color:var(--muted); word-break:break-word}
+  .ladezeile{color:var(--muted)}
+  .ladezeile .ladetipp{display:block; font-size:12px; margin-top:4px}
+
+  /* Runterziehen zum Aktualisieren */
+  .ptr{position:fixed; top:8px; left:50%; z-index:60; width:38px; height:38px; border-radius:50%;
+    background:var(--card); border:1px solid var(--line); box-shadow:var(--shadow);
+    display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:18px;
+    opacity:0; pointer-events:none; transform:translate(-50%,0)}
+  .ptr.bereit{color:var(--accent); border-color:var(--accent)}
+  .ptr.laeuft span{display:block; animation:ptrspin .9s linear infinite}
+  @keyframes ptrspin{to{transform:rotate(360deg)}}
 
   .actions{display:flex; gap:7px; flex-wrap:wrap; padding:10px 0 14px; border-top:1px solid var(--line); margin-top:10px}
   .chip{
@@ -568,23 +584,70 @@ function toast(msg, kind2){
 }
 
 /* Anfragen laufen bewusst NACHEINANDER: Apps Script verträgt keine parallelen Aufrufe
-   desselben Kontos zuverlässig (sonst brechen einzelne Abrufe mit "Netzwerkfehler" ab). */
-var apiQueue = Promise.resolve();
-function api(params){
-  var starte = function(){ return apiRaw(params); };
-  var p = apiQueue.then(starte, starte);
-  apiQueue = p.catch(function(){});   // Fehler blockiert die Warteschlange nicht
-  return p;
+   desselben Kontos zuverlässig (sonst brechen einzelne Abrufe mit "Netzwerkfehler" ab).
+
+   NEU – zwei Spuren statt einer Schlange: Was der Nutzer gerade angestoßen hat (Karte
+   antippen, Aktualisieren, Suchen) wird VOR die Hintergrundarbeit gesetzt. Vorher landete
+   ein Antippen hinter einem laufenden Hintergrund-Abruf und man wartete bis zu einer Minute
+   auf einen Text, der längst auf dem Server lag. */
+var apiWarteschlange = [];
+var apiLaeuft = false;
+
+function api(params, opt){
+  opt = opt || {};
+  return new Promise(function(resolve, reject){
+    var auftrag = { params:params, opt:opt, resolve:resolve, reject:reject };
+    if(opt.vorrang){
+      var i = 0;
+      while(i < apiWarteschlange.length && apiWarteschlange[i].opt.vorrang) i++;
+      apiWarteschlange.splice(i, 0, auftrag);   // hinter andere Vorrang-, vor alle Hintergrundaufträge
+    } else {
+      apiWarteschlange.push(auftrag);
+    }
+    apiAbarbeiten();
+  });
 }
 
-/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet. */
-function apiRaw(params){
+/* Wartet gerade etwas vom Nutzer Angestoßenes? Dann pausiert die Hintergrundarbeit. */
+function vorrangOffen(){
+  if(apiWarteschlange.some(function(a){ return a.opt.vorrang; })) return true;
+  return false;
+}
+
+function apiAbarbeiten(){
+  if(apiLaeuft) return;
+  var a = apiWarteschlange.shift();
+  if(!a) return;
+  apiLaeuft = true;
+  var weiter = function(){ apiLaeuft = false; setTimeout(apiAbarbeiten, 0); };
+  apiMitWiederholung(a.params, a.opt, 1)
+    .then(function(r){ a.resolve(r); weiter(); }, function(e){ a.reject(e); weiter(); });
+}
+
+/* Ein einzelner Aussetzer ist normal: Googles Server schläft ein, das Handy wechselt gerade
+   das Netz. Statt sofort "Backend nicht erreichbar" zu melden, wird still wiederholt – genau
+   deshalb ging es beim zweiten Tippen ja schon wieder. */
+function apiMitWiederholung(params, opt, versuch){
+  var max = opt.versuche || 3;
+  return apiRaw(params, opt).catch(function(err){
+    if(err && err.message === "NO_CONFIG") throw err;
+    if(versuch >= max) throw err;
+    return new Promise(function(r){ setTimeout(r, versuch === 1 ? 1200 : 3500); })
+      .then(function(){ return apiMitWiederholung(params, opt, versuch + 1); });
+  });
+}
+
+/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet.
+   Die Frist ist kürzer als früher (60 s): eine hängende Anfrage darf die Warteschlange nicht
+   minutenlang blockieren – lieber schnell abbrechen und neu versuchen. */
+function apiRaw(params, opt){
+  opt = opt || {};
   return new Promise(function(resolve, reject){
     if(!cfg.endpoint || !cfg.secret){ reject(new Error("NO_CONFIG")); return; }
     var cb = "__cb" + Math.random().toString(36).slice(2);
     var script = document.createElement("script");
-    // Kürzer als früher: eine hängende Anfrage darf die Warteschlange nicht lange blockieren
-    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server nicht erreichbar.")); }, 60000);
+    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server antwortet gerade nicht.")); },
+                           opt.frist || 25000);
     function cleanup(){ clearTimeout(timer); delete window[cb]; if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
     var q = Object.assign({ kind: kind }, params, { token: cfg.secret, callback: cb });
@@ -593,6 +656,52 @@ function apiRaw(params){
     script.onerror = function(){ cleanup(); reject(new Error("Netzwerkfehler beim Aufruf des Backends.")); };
     document.body.appendChild(script);
   });
+}
+
+/* --------------------- Fehlermeldungen in Klartext ----------------------
+   Der Server reicht die Rohmeldung von Gemini durch ("HTTP 403: The caller does not have
+   permission"). Damit kann man nichts anfangen. Hier steht, was los ist UND was zu tun ist.
+   fluechtig = ein erneuter Versuch kann helfen; auto = die App versucht es einmal selbst. */
+function fehlerKlartext(roh){
+  var t = String(roh == null ? "" : roh).trim();
+  if(!t) return { text:"Unbekannter Fehler.", tipp:"Tippe auf „Erneut versuchen“.", fluechtig:true, auto:true };
+
+  if(/403|does not have permission|PERMISSION_DENIED|API key not valid|API_KEY_INVALID/i.test(t))
+    return { text:"Gemini hat den Zugriff abgelehnt (403).",
+      tipp:"Der API-Schlüssel im Apps Script passt nicht mehr. Häufigste Ursachen: der Schlüssel ist auf bestimmte Websites oder IP-Adressen eingeschränkt (das funktioniert hier nicht), die „Generative Language API“ ist im Google-Projekt nicht aktiviert, oder der Schlüssel gehört zu einem gelöschten Projekt. Erzeuge unter aistudio.google.com/apikey einen neuen Schlüssel ohne Einschränkung und trage ihn im Apps Script bei GEMINI_KEY ein.",
+      fluechtig:false, auto:false };
+
+  if(/429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(t))
+    return { text:"Das Gratis-Kontingent von Gemini ist gerade aufgebraucht.",
+      tipp:"Warte ein paar Minuten und tippe dann auf „Erneut versuchen“. Pro Tag sind rund 8 Stunden Video drin.",
+      fluechtig:true, auto:false };
+
+  if(/HTTP 5\d\d|UNAVAILABLE|overloaded|Internal error|DEADLINE_EXCEEDED/i.test(t))
+    return { text:"Gemini war kurz überlastet.",
+      tipp:"Das legt sich von selbst – die App versucht es gleich noch einmal.",
+      fluechtig:true, auto:true };
+
+  if(/abgelehnt \(STOP\)|finishReason|MAX_TOKENS|leere Antwort|keine Antwort/i.test(t))
+    return { text:"Gemini hat geantwortet, aber keinen Text geliefert.",
+      tipp:"Typisch bei sehr langen Videos (über ~90 Minuten), Altersfreigabe, Ländersperre oder nicht öffentlichen Videos. Die App versucht es einmal automatisch neu. Bleibt es dabei, füge unten das Transkript als eigenen Text ein – damit klappt es fast immer.",
+      fluechtig:true, auto:true };
+
+  if(/SAFETY|RECITATION|blocked|PROHIBITED/i.test(t))
+    return { text:"Gemini hat die Antwort zurückgehalten (Sicherheitsfilter).",
+      tipp:"Mit eigenem Text – Transkript oder Artikeltext unten einfügen – geht es meistens trotzdem.",
+      fluechtig:false, auto:false };
+
+  if(/Zeitüberschreitung|nicht erreichbar|Netzwerkfehler|timeout/i.test(t))
+    return { text:"Der Server war kurz nicht erreichbar.",
+      tipp:"Die App versucht es von selbst weiter – du musst nichts tun.",
+      fluechtig:true, auto:true };
+
+  if(/Bezahlschranke|paywall|login|401|Cloudflare|consent/i.test(t))
+    return { text:"Die Seite lässt sich nicht auslesen.",
+      tipp:"Bezahlschranke, Login-Pflicht oder Bot-Sperre. Öffne die Seite, kopiere den Artikeltext und füge ihn unten als eigenen Text ein.",
+      fluechtig:false, auto:false };
+
+  return { text:t, tipp:"", fluechtig:false, auto:false };
 }
 
 /* ------------------------- Mini-Markdown-Renderer ----------------------- */
@@ -1390,11 +1499,20 @@ function commonBody(e, openLabel){
   var langSel = LANGS.map(function(l){ return '<option value="'+l+'"'+(S().viewLang[e.id]===l?' selected':'')+'>'+l+'</option>'; }).join("");
   var bodyInner = "";
   if(st === "error"){
-    bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>' + textHilfeHtml(e);
+    var f = fehlerKlartext(e.error);
+    bodyInner = '<div class="errbox"><b>'+esc(f.text)+'</b>'+
+      (f.tipp ? '<div class="errtipp">'+esc(f.tipp)+'</div>' : '')+
+      (e.error && String(e.error) !== f.text ? '<div class="errroh">'+esc(e.error)+'</div>' : '')+
+      '</div>' + textHilfeHtml(e);
   } else if(st === "done" && !e.summary){
-    bodyInner = e._ladefehler
-      ? '<div class="errbox">Text konnte nicht geladen werden: '+esc(e._ladefehler)+'</div>'
-      : '<p style="color:var(--muted)"><span class="spin"></span> Text wird geladen …</p>';
+    var fl = e._ladefehler ? fehlerKlartext(e._ladefehler) : null;
+    bodyInner = fl
+      ? '<div class="errbox"><b>Text konnte nicht geladen werden.</b>'+
+        '<div class="errtipp">'+esc(fl.text)+(fl.tipp ? " " + fl.tipp : "")+'</div></div>'
+      : '<p class="ladezeile"><span class="spin"></span> Text wird geladen …'+
+        '<span class="ladezeit" data-id="'+esc(e.id)+'"></span>'+
+        '<span class="ladetipp">Dauert es länger, arbeitet der Server gerade an einer neuen '+
+        'Zusammenfassung – gleich ist er wieder frei.</span></p>';
   } else if(st === "done"){
     var current = S().viewLang[e.id] || e.language || "Deutsch";
     var text = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
@@ -1557,11 +1675,17 @@ function mergeCached(k, fresh){
    angezeigt. Früher blieb bei einem Fehler für immer „Text wird geladen …" stehen – ohne Hinweis
    und ohne neuen Versuch. Häufigste Ursache: Apps Script bearbeitet gerade im Hintergrund ein
    Video und beantwortet parallele Anfragen erst nach Minuten (Zeitüberschreitung). */
-function ensureFull(id, forKind, zweiterVersuch){
+var laufendeTexte = {};   // verhindert, dass mehrfaches Antippen denselben Abruf mehrfach startet
+var ladeStart = {};       // wann der Abruf begann – für die Sekundenanzeige in der Karte
+
+function ensureFull(id, forKind, opt){
+  opt = opt || {};
   var k = forKind || kind;
   var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
   if(!e) return Promise.resolve(null);
   if(e.summary || e.status !== "done") return Promise.resolve(e);
+  var schluessel = k + ":" + id;
+  if(laufendeTexte[schluessel]) return laufendeTexte[schluessel];
 
   function merken(text){
     var akt = store[k].entries.find(function(x){ return String(x.id)===String(id); });
@@ -1569,30 +1693,47 @@ function ensureFull(id, forKind, zweiterVersuch){
     if(k === kind){ store[k].lastSig = ""; render(); reopen(id); }
     return akt || e;
   }
-  function nochmal(text){
-    if(zweiterVersuch) return merken(text);
-    return new Promise(function(res){ setTimeout(res, 2500); })
-      .then(function(){ return ensureFull(id, k, true); });
+
+  var maxRunden = opt.vorrang ? 2 : 1;   // je Runde versucht es die API-Schicht selbst mehrfach
+  function hole(runde){
+    return apiFor(k, { action:"get", id:id },
+                  { vorrang: !!opt.vorrang, versuche: 2, frist: opt.vorrang ? 20000 : 15000 })
+      .then(function(res){
+        if(res && res.ok && res.entry){
+          if(res.entry.status === "done" && !res.entry.summary){
+            return merken("Der Eintrag ist als fertig gespeichert, enthält aber keinen Text. " +
+                          "Am besten unten neu zusammenfassen lassen.");
+          }
+          var i = store[k].entries.findIndex(function(x){ return String(x.id)===String(id); });
+          if(i >= 0){ store[k].entries[i] = res.entry; saveCache(k); }
+          return res.entry;
+        }
+        throw new Error((res && res.error) || "Der Server hat keinen Text zurückgegeben.");
+      })
+      .catch(function(err){
+        var text = err && err.message ? err.message : "Netzwerkfehler beim Nachladen.";
+        if(runde >= maxRunden) return merken(text);
+        return new Promise(function(r){ setTimeout(r, 2000); }).then(function(){ return hole(runde+1); });
+      });
   }
 
-  return apiFor(k, { action:"get", id:id }).then(function(res){
-    if(res && res.ok && res.entry){
-      if(res.entry.status === "done" && !res.entry.summary){
-        return merken("Der Eintrag ist als fertig gespeichert, enthält aber keinen Text. " +
-                      "Am besten unten neu zusammenfassen lassen.");
-      }
-      var i = store[k].entries.findIndex(function(x){ return String(x.id)===String(id); });
-      if(i >= 0){
-        store[k].entries[i] = res.entry;
-        saveCache(k);
-      }
-      return res.entry;
-    }
-    return nochmal((res && res.error) || "Der Server hat keinen Text zurückgegeben.");
-  }).catch(function(err){
-    return nochmal(err && err.message ? err.message : "Netzwerkfehler beim Nachladen.");
-  });
+  ladeStart[schluessel] = Date.now();
+  var p = hole(1);
+  laufendeTexte[schluessel] = p;
+  var fertig = function(){ delete laufendeTexte[schluessel]; delete ladeStart[schluessel]; };
+  p.then(fertig, fertig);
+  return p;
 }
+
+/* Sekundenanzeige im "Text wird geladen …": ein stiller Balken ohne Rückmeldung fühlt sich
+   wie ein Absturz an – hier sieht man, dass wirklich etwas passiert. */
+setInterval(function(){
+  var els = document.querySelectorAll(".ladezeit");
+  for(var i=0;i<els.length;i++){
+    var start = ladeStart[kind + ":" + els[i].getAttribute("data-id")];
+    els[i].textContent = start ? (" (" + Math.round((Date.now()-start)/1000) + " s)") : "";
+  }
+}, 1000);
 
 /* Zwischenspeicher schreiben – bei Platzmangel die ältesten Volltexte opfern. */
 function saveCache(k){
@@ -1622,10 +1763,12 @@ function withPending(k, liste){
 function refresh(k, laut){
   k = k || kind;
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
-  return apiFor(k, { action:"list", light:1 }).then(function(res){
+  return apiFor(k, { action:"list", light:1 },
+                { vorrang: !!laut, frist: laut ? 20000 : 25000 }).then(function(res){
     if(res && res.ok){
       if(abrufFehler){ abrufFehler = 0; updateNotice(); }
       pruefeFertig(k, res.entries || []);     // Benachrichtigung bei "fertig"
+      autoWiederholen(k, res.entries || []);  // einmalig: hängengebliebene Fehler selbst neu anstoßen
       store[k].entries = entferneDoppelte(k, withPending(k, mergeCached(k, res.entries || [])));
       saveCache(k);
       if(k === kind){
@@ -1639,7 +1782,7 @@ function refresh(k, laut){
       schedulePolling();
       prefetchNewest(k);
     } else if(res && res.error){
-      toast(res.error, "err");
+      if(laut) toast(fehlerKlartext(res.error).text, "err");
     }
   }).catch(function(err){
     if(err.message === "NO_CONFIG") return;
@@ -1660,13 +1803,17 @@ function refresh(k, laut){
 var prefetching = {};
 function prefetchNewest(k, max){
   if(prefetching[k]) return;
-  var fehlend = store[k].entries.filter(function(e){ return e.status==="done" && !e.summary; })
+  var fehlend = store[k].entries.filter(function(e){ return e.status==="done" && !e.summary && !e._ladefehler; })
                                 .slice(0, max || 4);
   if(!fehlend.length) return;
   prefetching[k] = true;
   var chain = Promise.resolve();
   fehlend.forEach(function(e){
-    chain = chain.then(function(){ return ensureFull(e.id, k); });
+    // Vor jedem Schritt nachsehen, ob der Nutzer gerade wartet – dann hat er Vorfahrt.
+    chain = chain.then(function(){
+      if(vorrangOffen()) return new Promise(function(r){ setTimeout(r, 1500); });
+      return ensureFull(e.id, k);
+    });
   });
   chain.then(function(){
     prefetching[k] = false;
@@ -1676,8 +1823,8 @@ function prefetchNewest(k, max){
 
 /* api-Aufruf für eine bestimmte Art (unabhängig von der aktiven Ansicht).
    Die Art wird fest mitgegeben – wichtig, weil Aufrufe in der Warteschlange verzögert starten. */
-function apiFor(k, params){
-  return api(Object.assign({ kind:k }, params));
+function apiFor(k, params, opt){
+  return api(Object.assign({ kind:k }, params), opt);
 }
 
 /* Beim Start nur den sichtbaren Bereich laden – die anderen kommen beim Umschalten.
@@ -1974,7 +2121,7 @@ var suchTimer = null;
 function serverSuche(){
   var q = S().search, k = kind;
   if(!q || q.length < 2 || !cfg.endpoint || !cfg.secret){ S().serverIds = null; return; }
-  apiFor(k, { action:"search", q:q }).then(function(res){
+  apiFor(k, { action:"search", q:q }, { vorrang:true }).then(function(res){
     if(res && res.ok && store[k].search === q){
       var vorher = (store[k].serverIds||[]).length;
       store[k].serverIds = (res.ids||[]).map(String);
@@ -2075,17 +2222,23 @@ function fragenNachErlaubnis(){
   });
 }
 
-function zeigeFertigMeldung(e){
+/* Die Meldung bekommt jetzt ein Ziel mit (data). Ohne das wusste der Service Worker beim
+   Antippen nicht, welcher Eintrag gemeint war – und ohne notificationclick-Handler (siehe
+   service-worker.js) schloss Android nur das Benachrichtigungscenter, die Meldung blieb
+   stehen und die App kam nie nach vorn. */
+function zeigeFertigMeldung(e, k){
   if(!benachrichtigungenAktiv() || !("Notification" in window) || Notification.permission !== "granted") return;
   var titel = e.title || "Zusammenfassung fertig";
   var text = (e.summary || "").replace(/[*#]/g,"").slice(0,120);
+  var daten = { id:String(e.id), kind: k || e.kind || kind };
   try{
     if(navigator.serviceWorker && navigator.serviceWorker.ready){
       navigator.serviceWorker.ready.then(function(reg){
         reg.showNotification("✅ " + titel, { body: text || "Die Zusammenfassung ist fertig.",
-          icon:"icons/icon-192.png", badge:"icons/icon-192.png", tag:"zsf-"+e.id });
-      }).catch(function(){ new Notification("✅ " + titel, { body:text }); });
-    } else { new Notification("✅ " + titel, { body:text }); }
+          icon:"icons/icon-192.png", badge:"icons/icon-192.png", tag:"zsf-"+e.id,
+          renotify:true, data:daten });
+      }).catch(function(){ new Notification("✅ " + titel, { body:text, data:daten }); });
+    } else { new Notification("✅ " + titel, { body:text, data:daten }); }
   }catch(err){}
 }
 
@@ -2094,8 +2247,58 @@ function pruefeFertig(k, neueListe){
   neueListe.forEach(function(e){
     var schluessel = k + ":" + e.id;
     var vorher = letzterStatus[schluessel];
-    if(vorher && vorher !== "done" && e.status === "done") zeigeFertigMeldung(e);
+    if(vorher && vorher !== "done" && e.status === "done") zeigeFertigMeldung(e, k);
     letzterStatus[schluessel] = e.status;
+  });
+}
+
+/* Einen bestimmten Eintrag anzeigen und aufklappen – Ziel des Tippens auf eine Benachrichtigung. */
+function oeffneEintrag(id, k, schonGeladen){
+  id = String(id || "");
+  if(!id) return;
+  if(k && KINDS.indexOf(k) >= 0 && k !== kind) switchKind(k);
+  var st = S();
+  var e = st.entries.find(function(x){ return String(x.id)===id; });
+  if(!e){
+    // Der Eintrag ist noch nicht im Gerät – einmal nachladen, dann aufgeben (kein Kreisverkehr).
+    if(schonGeladen){ toast("Der Eintrag ist nicht mehr da.", "err"); return; }
+    refresh(kind, true).then(function(){ oeffneEintrag(id, null, true); });
+    return;
+  }
+  // Liegt der Eintrag schon im Archiv, würde der Filter "Offen" ihn verstecken.
+  if(e.read && st.readFilter === "offen"){ st.readFilter = "alle"; updateToolbar(); }
+  st.search = ""; $("searchInput").value = "";
+  st.tagFilter = "";
+  st.openCards[id] = true;
+  st.lastSig = ""; render(); reopen(id);
+  var c = document.querySelector('.card[data-id="'+CSS.escape(id)+'"]');
+  if(c) c.scrollIntoView({ block:"center" });
+  if(e.status === "done" && !e.summary){
+    ensureFull(id, kind, { vorrang:true }).then(function(){ S().lastSig=""; render(); reopen(id); });
+  }
+}
+
+/* Einmalige Selbstheilung: Fehler, die erfahrungsgemäß beim zweiten Anlauf verschwinden
+   (Gemini überlastet, leere Antwort), stößt die App selbst noch einmal an – aber GENAU EINMAL
+   pro Eintrag. Damit hängt nichts in einer Endlosschleife. */
+var autoNeu = {};
+try{ autoNeu = JSON.parse(localStorage.getItem("auto_retry") || "{}"); }catch(e){}
+function autoNeuMerken(s){
+  autoNeu[s] = 1;
+  var keys = Object.keys(autoNeu);
+  if(keys.length > 400){ keys.slice(0, keys.length - 300).forEach(function(x){ delete autoNeu[x]; }); }
+  try{ localStorage.setItem("auto_retry", JSON.stringify(autoNeu)); }catch(err){}
+}
+function autoWiederholen(k, liste){
+  liste.forEach(function(e){
+    if(e.status !== "error") return;
+    var s = k + ":" + e.id;
+    if(autoNeu[s]) return;
+    if(!fehlerKlartext(e.error).auto) return;
+    autoNeuMerken(s);
+    apiFor(k, { action:"retry", id:e.id }).then(function(res){
+      if(res && res.ok) setTimeout(function(){ refresh(k); }, 8000);
+    }).catch(function(){});
   });
 }
 
@@ -2149,7 +2352,8 @@ $("list").addEventListener("click", function(ev){
       // Volltext bei Bedarf nachladen (Liste enthält nur Metadaten)
       var e0 = S().entries.find(function(x){ return String(x.id)===String(id); });
       if(e0 && e0.status==="done" && !e0.summary){
-        ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
+        // vorrang: der Abruf überholt alles, was gerade im Hintergrund läuft
+        ensureFull(id, kind, { vorrang:true }).then(function(){ S().lastSig=""; render(); reopen(id); });
       }
     }
     else {
@@ -2184,7 +2388,7 @@ $("list").addEventListener("click", function(ev){
     var eR = S().entries.find(function(x){ return String(x.id)===String(id); });
     if(eR) delete eR._ladefehler;
     S().lastSig=""; render(); reopen(id);
-    ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
+    ensureFull(id, kind, { vorrang:true }).then(function(){ S().lastSig=""; render(); reopen(id); });
     return;
   }
   if(act === "tts-full" || act === "tts-short"){
@@ -2199,10 +2403,10 @@ $("list").addEventListener("click", function(ev){
     toast("Gelöscht.", "ok");
     loescheEintrag(id);
   } else if(act === "retry"){
-    api({ action:"retry", id:id }).then(function(res){
+    api({ action:"retry", id:id }, { vorrang:true }).then(function(res){
       if(res && res.ok){ toast("Wird erneut versucht …", "ok"); refresh(); }
-      else toast((res && res.error) || "Erneuter Versuch nicht möglich.", "err");
-    }).catch(function(err){ toast(err.message, "err"); });
+      else toast(fehlerKlartext((res && res.error) || "Erneuter Versuch nicht möglich.").text, "err");
+    }).catch(function(err){ toast(fehlerKlartext(err.message).text, "err"); });
   } else if(act === "ask"){
     submitQuestion(id, card.querySelector(".qain"));
   } else if(act === "copy"){
@@ -2281,15 +2485,15 @@ function submitQuestion(id, input){
   if(!e || e.status !== "done"){ toast("Erst wenn die Zusammenfassung fertig ist.", "err"); return; }
   if(input) input.disabled = true;
   toast("Frage wird beantwortet …");
-  api({ action:"ask", id:id, q:q }).then(function(res){
+  api({ action:"ask", id:id, q:q }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     if(res && res.ok){
       e.qa = res.qa || (e.qa||[]).concat([{ q:q, a:res.answer }]);
       S().qaDraft[id] = "";
       saveCache(kind);
       S().lastSig = ""; render(); reopen(id);
       toast("Antwort da.", "ok");
-    } else { if(input) input.disabled = false; toast((res&&res.error)||"Frage fehlgeschlagen.", "err"); }
-  }).catch(function(err){ if(input) input.disabled = false; toast(err.message, "err"); });
+    } else { if(input) input.disabled = false; toast(fehlerKlartext((res&&res.error)||"Frage fehlgeschlagen.").text, "err"); }
+  }).catch(function(err){ if(input) input.disabled = false; toast(fehlerKlartext(err.message).text, "err"); });
 }
 
 /* ---- Wischen zum Löschen + Lange drücken zum Auswählen ---- */
@@ -2478,7 +2682,7 @@ $("list").addEventListener("change", function(ev){
   }
   ev.target.disabled = true;
   toast("Übersetze nach "+lang+" …");
-  api({ action:"translate", id:id, lang:lang }).then(function(res){
+  api({ action:"translate", id:id, lang:lang }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     if(res && res.ok){
       e.translations = e.translations || {};
       e.translations[lang] = res.text;
@@ -2608,7 +2812,7 @@ $("testBtn").onclick = function(){
     if(el) el.textContent = Math.round((Date.now()-t0)/1000) + " s";
   }, 1000);
   var fertig = function(){ clearInterval(ticker); $("testBtn").disabled = false; };
-  api({ action:"ping" }).then(function(res){
+  api({ action:"ping" }, { vorrang:true, frist:60000, versuche:2 }).then(function(res){
     fertig();
     if(res && res.ok){ $("testLine").innerHTML = '<span style="color:var(--ok)">✓ Verbindung erfolgreich!</span>'; }
     else {
@@ -2646,6 +2850,70 @@ function updateNotice(){
     n.classList.remove("show");
   }
 }
+
+/* ------------------- Runterziehen zum Aktualisieren ---------------------
+   Vorher griff die Geste des Browsers: die lud nur die Seite neu und holte danach lediglich
+   den sichtbaren Bereich – der Knopf oben holt dagegen alle drei Bereiche. Jetzt macht die
+   Geste genau dasselbe wie der Knopf, ohne Seitenneuladen. */
+(function initPullToRefresh(){
+  var y0 = null, x0 = 0, zieh = 0, aktiv = false, laeuft = false;
+  var ind = document.createElement("div");
+  ind.className = "ptr";
+  ind.innerHTML = "<span>↻</span>";
+  document.body.appendChild(ind);
+  var SCHWELLE = 70;
+
+  function setz(px, weich){
+    ind.style.transition = weich ? "transform .25s ease, opacity .25s ease" : "";
+    ind.style.transform = "translate(-50%," + Math.min(px, 96) + "px)";
+    ind.style.opacity = String(Math.min(1, px / SCHWELLE));
+    ind.classList.toggle("bereit", px >= SCHWELLE);
+  }
+
+  window.addEventListener("touchstart", function(ev){
+    if(laeuft || !ev.touches || ev.touches.length !== 1) return;
+    if(window.scrollY > 0) return;
+    if(document.querySelector(".overlay.show")) return;
+    y0 = ev.touches[0].clientY; x0 = ev.touches[0].clientX; aktiv = false; zieh = 0;
+  }, { passive:true });
+
+  window.addEventListener("touchmove", function(ev){
+    if(y0 === null || laeuft) return;
+    var dy = ev.touches[0].clientY - y0, dx = ev.touches[0].clientX - x0;
+    if(!aktiv){
+      // Nur eindeutig senkrechtes Ziehen zählt – Wischen zum Löschen bleibt unberührt.
+      if(dy > 12 && Math.abs(dy) > Math.abs(dx) * 1.6 && window.scrollY <= 0){ aktiv = true; }
+      else if(Math.abs(dx) > 12 || dy < -8){ y0 = null; return; }
+      else return;
+    }
+    zieh = Math.max(0, dy * 0.5);
+    setz(zieh);
+    if(ev.cancelable) ev.preventDefault();
+  }, { passive:false });
+
+  function ende(){
+    if(y0 === null) return;
+    y0 = null;
+    if(!aktiv){ setz(0, true); return; }
+    aktiv = false;
+    suppressClickUntil = Date.now() + 400;   // sonst klappt die Karte unter dem Finger auf
+    if(zieh < SCHWELLE){ setz(0, true); return; }
+    laeuft = true;
+    ind.classList.add("laeuft");
+    setz(SCHWELLE);
+    var t0 = Date.now();
+    Promise.all(KINDS.map(function(k){ return refresh(k, k === kind); })).then(function(){
+      // kurz stehen lassen, sonst wirkt ein schneller Abruf wie "nichts passiert"
+      setTimeout(function(){
+        laeuft = false;
+        ind.classList.remove("laeuft", "bereit");
+        setz(0, true);
+      }, Math.max(0, 450 - (Date.now() - t0)));
+    });
+  }
+  window.addEventListener("touchend", ende);
+  window.addEventListener("touchcancel", ende);
+})();
 
 /* ------------------------- Geteilte Links empfangen --------------------- */
 function handleShareTarget(){
@@ -2685,6 +2953,24 @@ function flushPendingShares(){
   if(byKind.news.length) addLinks("news", byKind.news);
 }
 
+/* Ziel einer angetippten Benachrichtigung: entweder meldet es der Service Worker an die
+   bereits laufende App, oder die App startet neu mit ?open=bereich:id in der Adresse. */
+function handleOpenTarget(){
+  var p = new URLSearchParams(location.search);
+  var wert = p.get("open");
+  if(!wert) return;
+  history.replaceState(null, "", location.pathname);
+  var teile = String(wert).split(":");
+  var k = teile.shift(), id = teile.join(":");
+  setTimeout(function(){ oeffneEintrag(id, k); }, 0);
+}
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.addEventListener("message", function(ev){
+    var d = ev.data || {};
+    if(d.open) oeffneEintrag(d.open, d.kind);
+  });
+}
+
 /* ------------------------------- Init ----------------------------------- */
 $("addBtn").onclick = function(){
   var v = $("addInput").value;
@@ -2692,12 +2978,14 @@ $("addBtn").onclick = function(){
   addMixed(v);
 };
 $("refreshBtn").onclick = function(){ toast("Aktualisiere …"); refreshAll(true); };
+/* Zurück im Vordergrund nach längerer Pause: nicht nur der sichtbare Bereich, sondern alles –
+   sonst stehen die Zähler der anderen Reiter auf altem Stand. */
 /* Sofort in der YouTube-Playlist nachsehen (sonst passiert das ohnehin jede Minute). */
 $("plScanBtn").onclick = function(){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var b = $("plScanBtn"); b.disabled = true;
   toast("Sehe in der Playlist nach …");
-  apiFor("yt", { action:"scan" }).then(function(res){
+  apiFor("yt", { action:"scan" }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     b.disabled = false;
     if(res && res.ok){
       toast(res.added ? (res.added + (res.added===1?" Video":" Videos") + " übernommen – wird jetzt zusammengefasst.")
@@ -2711,7 +2999,7 @@ $("scanBtn").onclick = function(){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var b = $("scanBtn"); b.disabled = true;
   toast("Sehe in Gmail nach …");
-  api({ action:"scan" }).then(function(res){
+  api({ action:"scan" }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     b.disabled = false;
     if(res && res.ok){
       toast(res.added ? (res.added + (res.added===1?" Mail":" Mails") + " übernommen – wird jetzt zusammengefasst.")
@@ -2791,6 +3079,7 @@ $("searchInput").value = S().search || "";
 render();
 updateNotice();
 handleShareTarget();
+handleOpenTarget();
 flushPendingShares();
 initHistory();
 refreshActive();   // nur der sichtbare Bereich – die anderen beim Umschalten

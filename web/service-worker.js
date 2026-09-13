@@ -69,3 +69,25 @@ self.addEventListener("fetch", function (e) {
     })
   );
 });
+
+/* Tippen auf eine Benachrichtigung – ohne diesen Teil schliesst Android nur das
+   Benachrichtigungscenter: die Meldung blieb stehen und die App kam nie nach vorn.
+   Jetzt wird die Meldung geschlossen, ein bereits offenes Fenster nach vorn geholt und ihm
+   gesagt, welcher Eintrag gemeint war; laeuft die App nicht, wird sie direkt dort geoeffnet. */
+self.addEventListener("notificationclick", function (e) {
+  var d = (e.notification && e.notification.data) || {};
+  e.notification.close();
+  var ziel = "./?open=" + encodeURIComponent((d.kind || "yt") + ":" + (d.id || ""));
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (list) {
+      for (var i = 0; i < list.length; i++) {
+        var c = list[i];
+        if (String(c.url).indexOf(self.registration.scope) === 0) {
+          if (d.id) { try { c.postMessage({ open: d.id, kind: d.kind }); } catch (err) {} }
+          return c.focus ? c.focus() : undefined;
+        }
+      }
+      return self.clients.openWindow(ziel);
+    })
+  );
+});
