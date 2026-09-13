@@ -25,6 +25,9 @@
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
+  /* Die eigene "Runterziehen zum Aktualisieren"-Geste uebernimmt – sonst greift die des
+     Browsers und die laedt nur die Seite neu, statt die Liste vom Server zu holen. */
+  html,body{overscroll-behavior-y:contain}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     background:var(--bg); color:var(--text); line-height:1.5;
@@ -154,6 +157,23 @@
 
   .errbox{background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.3);
     color:var(--err); padding:10px 12px; border-radius:10px; font-size:13.5px; margin:4px 0 10px}
+  .errbox .errtipp{margin-top:6px; color:var(--text); font-weight:400; line-height:1.45}
+  .errbox .errroh{margin-top:7px; font-size:11.5px; color:var(--muted); word-break:break-word}
+  .ladezeile{color:var(--muted)}
+  .ladezeile .ladetipp{display:block; font-size:12px; margin-top:4px}
+
+  /* Runterziehen zum Aktualisieren */
+  .ptr{position:fixed; top:8px; left:50%; z-index:60; width:38px; height:38px; border-radius:50%;
+    background:var(--card); border:1px solid var(--line); box-shadow:var(--shadow);
+    display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:18px;
+    opacity:0; pointer-events:none; transform:translate(-50%,0)}
+  .ptr.bereit{color:var(--accent); border-color:var(--accent)}
+  /* Marke am Listenende: sobald sie in Sicht kommt, werden weitere Karten gebaut */
+  .mehr{text-align:center; color:var(--muted); font-size:12.5px; padding:14px 0 22px}
+  /* Zähler für Aktionen, die noch zum Server müssen */
+  .offen{font-size:12px; color:var(--warn); text-align:center; padding:0 0 10px; display:none}
+  .ptr.laeuft span{display:block; animation:ptrspin .9s linear infinite}
+  @keyframes ptrspin{to{transform:rotate(360deg)}}
 
   .actions{display:flex; gap:7px; flex-wrap:wrap; padding:10px 0 14px; border-top:1px solid var(--line); margin-top:10px}
   .chip{
@@ -322,6 +342,7 @@
 
 <main>
   <div class="notice" id="notice"></div>
+  <div class="offen" id="offenCount"></div>
 
   <div class="addbar" id="addbar">
     <textarea id="addInput"></textarea>
@@ -523,7 +544,9 @@ var cfg = {
 
 /* Zwei getrennte Datensätze (YouTube / News), jeder mit eigenem UI-Zustand. */
 function mkState(cacheKey){
-  return { entries: JSON.parse(localStorage.getItem(cacheKey)||"[]"),
+  var roh = [];
+  try{ roh = JSON.parse(localStorage.getItem(cacheKey)||"[]"); }catch(e){ roh = []; }
+  return { entries: roh,
     viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey,
     // Beim Start immer "Offen": Was schon gehört wurde, soll nicht wieder im Weg stehen.
     readFilter:"offen", tagFilter:"", serverIds:null, textOffen:{}, textDraft:{} };
@@ -568,31 +591,190 @@ function toast(msg, kind2){
 }
 
 /* Anfragen laufen bewusst NACHEINANDER: Apps Script verträgt keine parallelen Aufrufe
-   desselben Kontos zuverlässig (sonst brechen einzelne Abrufe mit "Netzwerkfehler" ab). */
-var apiQueue = Promise.resolve();
-function api(params){
-  var starte = function(){ return apiRaw(params); };
-  var p = apiQueue.then(starte, starte);
-  apiQueue = p.catch(function(){});   // Fehler blockiert die Warteschlange nicht
-  return p;
+   desselben Kontos zuverlässig (sonst brechen einzelne Abrufe mit "Netzwerkfehler" ab).
+
+   NEU – zwei Spuren statt einer Schlange: Was der Nutzer gerade angestoßen hat (Karte
+   antippen, Aktualisieren, Suchen) wird VOR die Hintergrundarbeit gesetzt. Vorher landete
+   ein Antippen hinter einem laufenden Hintergrund-Abruf und man wartete bis zu einer Minute
+   auf einen Text, der längst auf dem Server lag. */
+var apiWarteschlange = [];
+var apiLaeuft = false;
+
+function api(params, opt){
+  opt = opt || {};
+  return new Promise(function(resolve, reject){
+    var auftrag = { params:params, opt:opt, resolve:resolve, reject:reject };
+    if(opt.vorrang){
+      var i = 0;
+      while(i < apiWarteschlange.length && apiWarteschlange[i].opt.vorrang) i++;
+      apiWarteschlange.splice(i, 0, auftrag);   // hinter andere Vorrang-, vor alle Hintergrundaufträge
+    } else {
+      apiWarteschlange.push(auftrag);
+    }
+    apiAbarbeiten();
+  });
 }
 
-/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet. */
-function apiRaw(params){
+/* Wartet gerade etwas vom Nutzer Angestoßenes? Dann pausiert die Hintergrundarbeit. */
+function vorrangOffen(){
+  if(apiWarteschlange.some(function(a){ return a.opt.vorrang; })) return true;
+  return false;
+}
+
+function apiAbarbeiten(){
+  if(apiLaeuft) return;
+  var a = apiWarteschlange.shift();
+  if(!a) return;
+  apiLaeuft = true;
+  var weiter = function(){ apiLaeuft = false; setTimeout(apiAbarbeiten, 0); };
+  apiMitWiederholung(a.params, a.opt, 1)
+    .then(function(r){ a.resolve(r); weiter(); }, function(e){ a.reject(e); weiter(); });
+}
+
+/* Ein einzelner Aussetzer ist normal: Googles Server schläft ein, das Handy wechselt gerade
+   das Netz. Statt sofort "Backend nicht erreichbar" zu melden, wird still wiederholt – genau
+   deshalb ging es beim zweiten Tippen ja schon wieder. */
+function apiMitWiederholung(params, opt, versuch){
+  var max = opt.versuche || 3;
+  return apiRaw(params, opt).catch(function(err){
+    if(err && err.message === "NO_CONFIG") throw err;
+    if(versuch >= max) throw err;
+    return new Promise(function(r){ setTimeout(r, versuch === 1 ? 1200 : 3500); })
+      .then(function(){ return apiMitWiederholung(params, opt, versuch + 1); });
+  });
+}
+
+/* ---------------------------- Übertragungsweg ---------------------------
+   Bevorzugt wird fetch: nur damit lässt sich eine Anfrage wirklich ABBRECHEN (AbortController),
+   nur damit gibt es einen echten HTTP-Status. JSONP kann beides nicht – ein hängender
+   <script>-Tag lädt weiter, auch wenn niemand mehr auf ihn wartet.
+   Klappt fetch nicht (CORS-Eigenheiten mancher Apps-Script-Bereitstellungen), schaltet die App
+   dauerhaft auf JSONP um und probiert fetch erst am nächsten Tag wieder. */
+var WEG = { art: localStorage.getItem("weg_art") || "auto",
+            seit: parseInt(localStorage.getItem("weg_seit") || "0", 10) || 0 };
+var fetchFehler = 0;
+
+function wegJsonp(){
+  if(WEG.art !== "jsonp") return false;
+  if(Date.now() - WEG.seit > 24*3600*1000){ wegSetzen("auto"); return false; }   // täglich neu prüfen
+  return true;
+}
+function wegSetzen(art){
+  WEG.art = art; WEG.seit = Date.now(); fetchFehler = 0;
+  try{ localStorage.setItem("weg_art", art); localStorage.setItem("weg_seit", String(WEG.seit)); }catch(e){}
+}
+
+function baueUrl(params, extra){
+  var q = Object.assign({ kind: kind }, params, { token: cfg.secret }, extra || {});
+  var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+"="+encodeURIComponent(q[k]); }).join("&");
+  return cfg.endpoint + (cfg.endpoint.indexOf("?")>-1?"&":"?") + qs;
+}
+
+function apiRaw(params, opt){
+  opt = opt || {};
+  if(!cfg.endpoint || !cfg.secret) return Promise.reject(new Error("NO_CONFIG"));
+  if(wegJsonp()) return apiJsonp(params, opt);
+  return apiFetch(params, opt).catch(function(err){
+    if(err && err.abgebrochen) throw err;
+    // Offline ist kein Grund, den Weg zu wechseln – da scheitert JSONP genauso.
+    if(navigator.onLine === false) throw err;
+    if(err && err.blockiert){
+      fetchFehler++;
+      if(fetchFehler >= 2) wegSetzen("jsonp");
+      return apiJsonp(params, opt);
+    }
+    throw err;
+  });
+}
+
+function apiFetch(params, opt){
+  var ctrl = ("AbortController" in window) ? new AbortController() : null;
+  var abgelaufen = false;
+  var timer = setTimeout(function(){ abgelaufen = true; if(ctrl) ctrl.abort(); }, opt.frist || 25000);
+  return fetch(baueUrl(params), { method:"GET", signal: ctrl ? ctrl.signal : undefined,
+                                  credentials:"omit", redirect:"follow" })
+    .then(function(r){
+      clearTimeout(timer);
+      if(!r.ok){ var e = new Error("Server antwortet mit HTTP " + r.status + "."); e.status = r.status; throw e; }
+      return r.json();
+    })
+    .then(function(j){ fetchFehler = 0; if(WEG.art !== "fetch") wegSetzen("fetch"); return j; })
+    .catch(function(err){
+      clearTimeout(timer);
+      if(abgelaufen){ var t = new Error("Zeitüberschreitung – Server antwortet gerade nicht."); throw t; }
+      // TypeError = CORS oder Netz; SyntaxError = HTML statt JSON (Apps-Script-Fehlerseite)
+      if(err && (err.name === "TypeError" || err.name === "SyntaxError")) err.blockiert = true;
+      throw err;
+    });
+}
+
+/* JSONP als Rückfallebene (umgeht CORS zuverlässig). Die Frist ist kürzer als früher (60 s):
+   eine hängende Anfrage darf die Warteschlange nicht minutenlang blockieren. */
+function apiJsonp(params, opt){
+  opt = opt || {};
   return new Promise(function(resolve, reject){
     if(!cfg.endpoint || !cfg.secret){ reject(new Error("NO_CONFIG")); return; }
     var cb = "__cb" + Math.random().toString(36).slice(2);
     var script = document.createElement("script");
-    // Kürzer als früher: eine hängende Anfrage darf die Warteschlange nicht lange blockieren
-    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server nicht erreichbar.")); }, 60000);
+    var timer = setTimeout(function(){ cleanup(); reject(new Error("Zeitüberschreitung – Server antwortet gerade nicht.")); },
+                           opt.frist || 25000);
     function cleanup(){ clearTimeout(timer); delete window[cb]; if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
-    var q = Object.assign({ kind: kind }, params, { token: cfg.secret, callback: cb });
-    var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+"="+encodeURIComponent(q[k]); }).join("&");
-    script.src = cfg.endpoint + (cfg.endpoint.indexOf("?")>-1?"&":"?") + qs;
+    script.src = baueUrl(params, { callback: cb });
     script.onerror = function(){ cleanup(); reject(new Error("Netzwerkfehler beim Aufruf des Backends.")); };
     document.body.appendChild(script);
   });
+}
+
+/* --------------------- Fehlermeldungen in Klartext ----------------------
+   Der Server reicht die Rohmeldung von Gemini durch ("HTTP 403: The caller does not have
+   permission"). Damit kann man nichts anfangen. Hier steht, was los ist UND was zu tun ist.
+   fluechtig = ein erneuter Versuch kann helfen; auto = die App versucht es einmal selbst. */
+function fehlerKlartext(roh){
+  var t = String(roh == null ? "" : roh).trim();
+  if(!t) return { text:"Unbekannter Fehler.", tipp:"Tippe auf „Erneut versuchen“.", fluechtig:true, auto:true };
+
+  if(/API key not valid|API_KEY_INVALID/i.test(t))
+    return { text:"Der Gemini-Schlüssel ist ungültig.",
+      tipp:"Erzeuge unter aistudio.google.com/apikey einen neuen Schlüssel und hinterlege ihn im Apps Script über zugangsdatenSetzen().",
+      fluechtig:false, auto:false };
+
+  if(/403|does not have permission|PERMISSION_DENIED/i.test(t))
+    return { text:"Gemini hat den Zugriff abgelehnt (403).",
+      tipp:"Meist ein Aussetzer: derselbe Schlüssel funktioniert Sekunden später wieder. Das Backend wiederholt es inzwischen von selbst, die App zusätzlich einmal. Bleibt es dabei, prüfe den Schlüssel – Anwendungseinschränkungen auf „Keine“, „Generative Language API“ erlaubt und im Projekt aktiviert.",
+      fluechtig:true, auto:true };
+
+  if(/429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(t))
+    return { text:"Das Gratis-Kontingent von Gemini ist gerade aufgebraucht.",
+      tipp:"Warte ein paar Minuten und tippe dann auf „Erneut versuchen“. Pro Tag sind rund 8 Stunden Video drin.",
+      fluechtig:true, auto:false };
+
+  if(/HTTP 5\d\d|UNAVAILABLE|overloaded|Internal error|DEADLINE_EXCEEDED/i.test(t))
+    return { text:"Gemini war kurz überlastet.",
+      tipp:"Das legt sich von selbst – die App versucht es gleich noch einmal.",
+      fluechtig:true, auto:true };
+
+  if(/abgelehnt \(STOP\)|finishReason|MAX_TOKENS|leere Antwort|keine Antwort/i.test(t))
+    return { text:"Gemini hat geantwortet, aber keinen Text geliefert.",
+      tipp:"Typisch bei sehr langen Videos (über ~90 Minuten), Altersfreigabe, Ländersperre oder nicht öffentlichen Videos. Die App versucht es einmal automatisch neu. Bleibt es dabei, füge unten das Transkript als eigenen Text ein – damit klappt es fast immer.",
+      fluechtig:true, auto:true };
+
+  if(/SAFETY|RECITATION|blocked|PROHIBITED/i.test(t))
+    return { text:"Gemini hat die Antwort zurückgehalten (Sicherheitsfilter).",
+      tipp:"Mit eigenem Text – Transkript oder Artikeltext unten einfügen – geht es meistens trotzdem.",
+      fluechtig:false, auto:false };
+
+  if(/Zeitüberschreitung|nicht erreichbar|Netzwerkfehler|timeout/i.test(t))
+    return { text:"Der Server war kurz nicht erreichbar.",
+      tipp:"Die App versucht es von selbst weiter – du musst nichts tun.",
+      fluechtig:true, auto:true };
+
+  if(/Bezahlschranke|paywall|login|401|Cloudflare|consent/i.test(t))
+    return { text:"Die Seite lässt sich nicht auslesen.",
+      tipp:"Bezahlschranke, Login-Pflicht oder Bot-Sperre. Öffne die Seite, kopiere den Artikeltext und füge ihn unten als eigenen Text ein.",
+      fluechtig:false, auto:false };
+
+  return { text:t, tipp:"", fluechtig:false, auto:false };
 }
 
 /* ------------------------- Mini-Markdown-Renderer ----------------------- */
@@ -1242,6 +1424,42 @@ function fmtCount(n){
 }
 var STATUS_LABEL = { pending:"⏳ in Warteschlange", processing:"⚙️ wird zusammengefasst", done:"✅ fertig", error:"⚠️ Fehler" };
 
+/* Der Server arbeitet EINEN Eintrag pro Minute ab. Aus der eigenen Liste lässt sich damit
+   ausrechnen, wann dieser hier dran ist – das beantwortet die Frage "hängt das?" ohne Raten. */
+function warteplatz(e){
+  var offen = store[e.kind || kind] ? store[e.kind || kind].entries : S().entries;
+  var reihe = offen.filter(function(x){ return x.status==="pending" || x.status==="processing"; })
+                   .slice().reverse();   // älteste zuerst – so arbeitet der Server sie ab
+  var i = reihe.findIndex(function(x){ return String(x.id)===String(e.id); });
+  return { platz: i + 1, gesamt: reihe.length };
+}
+
+function wartetext(e){
+  var w = warteplatz(e);
+  var teile = [];
+  if(e.status === "processing") teile.push("Wird gerade zusammengefasst.");
+  else if(w.platz > 0 && w.gesamt > 1) teile.push("Platz " + w.platz + " von " + w.gesamt + " in der Warteschlange.");
+  else teile.push("Wird als Nächstes zusammengefasst.");
+  if(w.platz > 1) teile.push("Etwa " + w.platz + " Minute" + (w.platz===1?"":"n") + ".");
+  var v = parseInt(e.attempts, 10) || 0;
+  if(v > 1) teile.push("Versuch " + v + " von 3.");
+  return teile.join(" ");
+}
+
+/* Kurzfassung für die Statuszeile auf der Karte. */
+function statusBadge(e){
+  var st = e.status || "pending";
+  if(st === "pending"){
+    var w = warteplatz(e);
+    if(w.platz > 1 && w.gesamt > 1) return "⏳ Platz " + w.platz + " von " + w.gesamt;
+  }
+  if(st === "processing"){
+    var v = parseInt(e.attempts, 10) || 0;
+    if(v > 1) return "⚙️ wird zusammengefasst (Versuch " + v + ")";
+  }
+  return STATUS_LABEL[st] || st;
+}
+
 function signature(arr){
   return arr.map(function(e){
     return e.id+":"+e.status+":"+((e.title||"").length)+":"+((e.summary||"").length)+":"+(e.durationText||"")+
@@ -1292,9 +1510,45 @@ function render(){
     list.innerHTML = '<div class="empty"><div class="big">🔍</div>'+grund+'</div>';
     return;
   }
-  list.innerHTML = shown.map(cardHtml).join("");
+  /* Nur den sichtbaren Anfang bauen, der Rest kommt beim Scrollen nach.
+     Vorher wurde bei JEDEM Abgleich die komplette Liste als HTML neu erzeugt – bei ein paar
+     hundert Einträgen ruckelt das spürbar, obwohl nur drei Karten auf den Schirm passen.
+     Aufgeklappte Karten zählen immer dazu, damit nichts unter dem Finger verschwindet. */
+  var noetig = 0;
+  shown.forEach(function(e, i){ if(S().openCards[e.id]) noetig = i + 1; });
+  var grenze = Math.max(sichtbarLimit, noetig);
+  var teil = shown.slice(0, grenze);
+  list.innerHTML = teil.map(cardHtml).join("") +
+    (shown.length > grenze
+      ? '<div class="mehr" id="mehrMarke">' + (shown.length - grenze) + ' weitere …</div>'
+      : "");
+  beobachteMehr();
   window.scrollTo(0, y);
 }
+
+/* Wie viele Karten gerade gebaut werden. Wächst beim Scrollen, springt bei jedem Filterwechsel
+   zurück auf den Anfang. */
+var SEITE = 25;
+var sichtbarLimit = SEITE;
+var mehrBeobachter = null;
+
+function beobachteMehr(){
+  var marke = $("mehrMarke");
+  if(!marke) return;
+  if(!("IntersectionObserver" in window)){   // sehr alte Browser: einfach alles zeigen
+    sichtbarLimit += SEITE; S().lastSig = ""; render(); return;
+  }
+  if(mehrBeobachter) mehrBeobachter.disconnect();
+  mehrBeobachter = new IntersectionObserver(function(eintraege){
+    if(!eintraege.some(function(x){ return x.isIntersecting; })) return;
+    sichtbarLimit += SEITE;
+    S().lastSig = "";
+    render();
+  }, { rootMargin: "600px" });
+  mehrBeobachter.observe(marke);
+}
+
+function limitZuruecksetzen(){ sichtbarLimit = SEITE; }
 
 /* Wendet Suche, Gelesen-Filter, Schlagwort, Zeitraum und Sortierung an. */
 function sichtbareEintraege(){
@@ -1350,7 +1604,7 @@ function tagsHtml(e){
 
 function mailCardHtml(e){
   var st = e.status || "pending";
-  var badge = STATUS_LABEL[st] || st;
+  var badge = statusBadge(e);
   var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
 
   var stats = [];
@@ -1390,18 +1644,28 @@ function commonBody(e, openLabel){
   var langSel = LANGS.map(function(l){ return '<option value="'+l+'"'+(S().viewLang[e.id]===l?' selected':'')+'>'+l+'</option>'; }).join("");
   var bodyInner = "";
   if(st === "error"){
-    bodyInner = '<div class="errbox">'+esc(e.error||"Unbekannter Fehler.")+'</div>' + textHilfeHtml(e);
+    var f = fehlerKlartext(e.error);
+    bodyInner = '<div class="errbox"><b>'+esc(f.text)+'</b>'+
+      (f.tipp ? '<div class="errtipp">'+esc(f.tipp)+'</div>' : '')+
+      (e.error && String(e.error) !== f.text ? '<div class="errroh">'+esc(e.error)+'</div>' : '')+
+      '</div>' + textHilfeHtml(e);
   } else if(st === "done" && !e.summary){
-    bodyInner = e._ladefehler
-      ? '<div class="errbox">Text konnte nicht geladen werden: '+esc(e._ladefehler)+'</div>'
-      : '<p style="color:var(--muted)"><span class="spin"></span> Text wird geladen …</p>';
+    var fl = e._ladefehler ? fehlerKlartext(e._ladefehler) : null;
+    bodyInner = fl
+      ? '<div class="errbox"><b>Text konnte nicht geladen werden.</b>'+
+        '<div class="errtipp">'+esc(fl.text)+(fl.tipp ? " " + fl.tipp : "")+'</div></div>'
+      : '<p class="ladezeile"><span class="spin"></span> Text wird geladen …'+
+        '<span class="ladezeit" data-id="'+esc(e.id)+'"></span>'+
+        '<span class="ladetipp">Dauert es länger, arbeitet der Server gerade an einer neuen '+
+        'Zusammenfassung – gleich ist er wieder frei.</span></p>';
   } else if(st === "done"){
     var current = S().viewLang[e.id] || e.language || "Deutsch";
     var text = (current === (e.language||"Deutsch")) ? e.summary : ((e.translations||{})[current] || e.summary);
     bodyInner = '<div class="ttsbar" data-id="'+esc(e.id)+'">'+ttsBarInner(e.id)+'</div>'+
                 '<div class="summary">'+renderMarkdown(text)+'</div>' + qaHtml(e);
   } else {
-    bodyInner = '<p style="color:var(--muted)">Wird im Hintergrund verarbeitet – das geschieht automatisch, du musst nichts tun.</p>';
+    bodyInner = '<p style="color:var(--muted)">' + wartetext(e) +
+      ' Das geschieht automatisch, du musst nichts tun.</p>';
   }
   return '<div class="body">'+
     bodyInner+
@@ -1422,7 +1686,7 @@ function commonBody(e, openLabel){
 
 function ytCardHtml(e){
   var st = e.status || "pending";
-  var badge = STATUS_LABEL[st] || st;
+  var badge = statusBadge(e);
   var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
   var dur = e.durationText ? '<span class="dur">'+esc(e.durationText)+'</span>' : "";
 
@@ -1457,7 +1721,7 @@ function ytCardHtml(e){
 
 function newsCardHtml(e){
   var st = e.status || "pending";
-  var badge = STATUS_LABEL[st] || st;
+  var badge = statusBadge(e);
   var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
 
   var thumb = e.image
@@ -1557,11 +1821,17 @@ function mergeCached(k, fresh){
    angezeigt. Früher blieb bei einem Fehler für immer „Text wird geladen …" stehen – ohne Hinweis
    und ohne neuen Versuch. Häufigste Ursache: Apps Script bearbeitet gerade im Hintergrund ein
    Video und beantwortet parallele Anfragen erst nach Minuten (Zeitüberschreitung). */
-function ensureFull(id, forKind, zweiterVersuch){
+var laufendeTexte = {};   // verhindert, dass mehrfaches Antippen denselben Abruf mehrfach startet
+var ladeStart = {};       // wann der Abruf begann – für die Sekundenanzeige in der Karte
+
+function ensureFull(id, forKind, opt){
+  opt = opt || {};
   var k = forKind || kind;
   var e = store[k].entries.find(function(x){ return String(x.id)===String(id); });
   if(!e) return Promise.resolve(null);
   if(e.summary || e.status !== "done") return Promise.resolve(e);
+  var schluessel = k + ":" + id;
+  if(laufendeTexte[schluessel]) return laufendeTexte[schluessel];
 
   function merken(text){
     var akt = store[k].entries.find(function(x){ return String(x.id)===String(id); });
@@ -1569,41 +1839,133 @@ function ensureFull(id, forKind, zweiterVersuch){
     if(k === kind){ store[k].lastSig = ""; render(); reopen(id); }
     return akt || e;
   }
-  function nochmal(text){
-    if(zweiterVersuch) return merken(text);
-    return new Promise(function(res){ setTimeout(res, 2500); })
-      .then(function(){ return ensureFull(id, k, true); });
+
+  var maxRunden = opt.vorrang ? 2 : 1;   // je Runde versucht es die API-Schicht selbst mehrfach
+  function hole(runde){
+    return apiFor(k, { action:"get", id:id },
+                  { vorrang: !!opt.vorrang, versuche: 2, frist: opt.vorrang ? 20000 : 15000 })
+      .then(function(res){
+        if(res && res.ok && res.entry){
+          if(res.entry.status === "done" && !res.entry.summary){
+            return merken("Der Eintrag ist als fertig gespeichert, enthält aber keinen Text. " +
+                          "Am besten unten neu zusammenfassen lassen.");
+          }
+          var i = store[k].entries.findIndex(function(x){ return String(x.id)===String(id); });
+          if(i >= 0){ store[k].entries[i] = res.entry; saveCache(k); }
+          return res.entry;
+        }
+        throw new Error((res && res.error) || "Der Server hat keinen Text zurückgegeben.");
+      })
+      .catch(function(err){
+        var text = err && err.message ? err.message : "Netzwerkfehler beim Nachladen.";
+        if(runde >= maxRunden) return merken(text);
+        return new Promise(function(r){ setTimeout(r, 2000); }).then(function(){ return hole(runde+1); });
+      });
   }
 
-  return apiFor(k, { action:"get", id:id }).then(function(res){
-    if(res && res.ok && res.entry){
-      if(res.entry.status === "done" && !res.entry.summary){
-        return merken("Der Eintrag ist als fertig gespeichert, enthält aber keinen Text. " +
-                      "Am besten unten neu zusammenfassen lassen.");
-      }
-      var i = store[k].entries.findIndex(function(x){ return String(x.id)===String(id); });
-      if(i >= 0){
-        store[k].entries[i] = res.entry;
-        saveCache(k);
-      }
-      return res.entry;
-    }
-    return nochmal((res && res.error) || "Der Server hat keinen Text zurückgegeben.");
-  }).catch(function(err){
-    return nochmal(err && err.message ? err.message : "Netzwerkfehler beim Nachladen.");
+  ladeStart[schluessel] = Date.now();
+  var p = hole(1);
+  laufendeTexte[schluessel] = p;
+  var fertig = function(){ delete laufendeTexte[schluessel]; delete ladeStart[schluessel]; };
+  p.then(fertig, fertig);
+  return p;
+}
+
+/* Sekundenanzeige im "Text wird geladen …": ein stiller Balken ohne Rückmeldung fühlt sich
+   wie ein Absturz an – hier sieht man, dass wirklich etwas passiert. */
+setInterval(function(){
+  var els = document.querySelectorAll(".ladezeit");
+  for(var i=0;i<els.length;i++){
+    var start = ladeStart[kind + ":" + els[i].getAttribute("data-id")];
+    els[i].textContent = start ? (" (" + Math.round((Date.now()-start)/1000) + " s)") : "";
+  }
+}, 1000);
+
+/* --------------------------- Zwischenspeicher ---------------------------
+   Zwei Ebenen, aus gutem Grund:
+   • localStorage hält nur die schlanke Liste (ohne Zusammenfassungen). Sie wird beim Start
+     synchron gelesen, damit sofort etwas auf dem Bildschirm steht.
+   • IndexedDB hält die Volltexte. localStorage ist synchron (blockiert also das Zeichnen) und
+     bei ~5 MB voll – dann warf die App die ältesten Zusammenfassungen weg. IndexedDB hat beides
+     nicht: asynchron und um Größenordnungen größer. */
+var DB_NAME = "zusammenfassungen", DB_STORE = "cache", DB_VERSION = 1;
+var dbOffen = null;
+
+function dbHole(){
+  if(dbOffen) return dbOffen;
+  dbOffen = new Promise(function(res, rej){
+    if(!("indexedDB" in window)){ rej(new Error("kein IndexedDB")); return; }
+    var req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = function(){
+      var db = req.result;
+      if(!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+    };
+    req.onsuccess = function(){ res(req.result); };
+    req.onerror = function(){ rej(req.error || new Error("IndexedDB nicht verfügbar")); };
+  }).catch(function(err){ dbOffen = null; throw err; });
+  return dbOffen;
+}
+
+function dbSchreiben(schluessel, wert){
+  return dbHole().then(function(db){
+    return new Promise(function(res, rej){
+      var t = db.transaction(DB_STORE, "readwrite");
+      t.objectStore(DB_STORE).put(wert, schluessel);
+      t.oncomplete = function(){ res(true); };
+      t.onerror = function(){ rej(t.error); };
+    });
+  }).catch(function(){ return false; });
+}
+
+function dbLesen(schluessel){
+  return dbHole().then(function(db){
+    return new Promise(function(res, rej){
+      var t = db.transaction(DB_STORE, "readonly");
+      var r = t.objectStore(DB_STORE).get(schluessel);
+      r.onsuccess = function(){ res(r.result || null); };
+      r.onerror = function(){ rej(r.error); };
+    });
+  }).catch(function(){ return null; });
+}
+
+/* Für den Soforteindruck beim Start: dieselbe Liste, nur ohne die großen Textfelder. */
+function schlankeListe(entries){
+  return entries.map(function(e){
+    return Object.assign({}, e, { summary:"", qa:[], translations:{}, light:true });
   });
 }
 
-/* Zwischenspeicher schreiben – bei Platzmangel die ältesten Volltexte opfern. */
 function saveCache(k){
+  var entries = store[k].entries;
+  dbSchreiben(store[k].cacheKey, entries);                 // Volltexte (asynchron, großzügig)
   try{
-    localStorage.setItem(store[k].cacheKey, JSON.stringify(store[k].entries));
+    localStorage.setItem(store[k].cacheKey, JSON.stringify(schlankeListe(entries)));
   }catch(err){
-    var schlank = store[k].entries.map(function(e, i){
-      return i < 30 ? e : Object.assign({}, e, { summary:"", qa:[], light:true });
-    });
-    try{ localStorage.setItem(store[k].cacheKey, JSON.stringify(schlank)); }catch(e2){}
+    // Selbst die schlanke Liste passt nicht mehr: auf die neuesten 200 kürzen.
+    try{ localStorage.setItem(store[k].cacheKey, JSON.stringify(schlankeListe(entries).slice(0, 200))); }catch(e2){}
   }
+}
+
+/* Nach dem ersten Zeichnen die Volltexte aus IndexedDB nachziehen (inkl. Alt-Bestand, der
+   noch komplett im localStorage lag). */
+function ladeVolltexteAusDb(){
+  return Promise.all(KINDS.map(function(k){
+    return dbLesen(store[k].cacheKey).then(function(gespeichert){
+      if(!gespeichert || !gespeichert.length) return;
+      var voll = {};
+      gespeichert.forEach(function(e){ if(e && e.summary) voll[String(e.id)] = e; });
+      var geaendert = false;
+      store[k].entries.forEach(function(e, i){
+        var v = voll[String(e.id)];
+        if(v && !e.summary && String(v.processedAt) === String(e.processedAt)){
+          store[k].entries[i] = Object.assign({}, v, { light:false });
+          delete store[k].entries[i].light;
+          geaendert = true;
+        }
+      });
+      if(geaendert && k === kind){ store[k].lastSig = ""; render(); }
+    });
+  }));
 }
 
 /* Noch nicht abgeschickte Platzhalter oben behalten, damit sie beim Aktualisieren
@@ -1622,10 +1984,12 @@ function withPending(k, liste){
 function refresh(k, laut){
   k = k || kind;
   if(!cfg.endpoint || !cfg.secret){ render(); return Promise.resolve(); }
-  return apiFor(k, { action:"list", light:1 }).then(function(res){
+  return apiFor(k, { action:"list", light:1 },
+                { vorrang: !!laut, frist: laut ? 20000 : 25000 }).then(function(res){
     if(res && res.ok){
       if(abrufFehler){ abrufFehler = 0; updateNotice(); }
       pruefeFertig(k, res.entries || []);     // Benachrichtigung bei "fertig"
+      autoWiederholen(k, res.entries || []);  // einmalig: hängengebliebene Fehler selbst neu anstoßen
       store[k].entries = entferneDoppelte(k, withPending(k, mergeCached(k, res.entries || [])));
       saveCache(k);
       if(k === kind){
@@ -1639,7 +2003,7 @@ function refresh(k, laut){
       schedulePolling();
       prefetchNewest(k);
     } else if(res && res.error){
-      toast(res.error, "err");
+      if(laut) toast(fehlerKlartext(res.error).text, "err");
     }
   }).catch(function(err){
     if(err.message === "NO_CONFIG") return;
@@ -1658,26 +2022,69 @@ function refresh(k, laut){
 /* Lädt im Hintergrund die Volltexte der neuesten Einträge nach (wenige, nacheinander),
    damit Antippen und Suche sofort greifen. Ältere kommen beim Öffnen dazu. */
 var prefetching = {};
+var kannSammeln = (localStorage.getItem("kann_sammeln") !== "0");   // altes Backend kennt getmany nicht
+
 function prefetchNewest(k, max){
   if(prefetching[k]) return;
-  var fehlend = store[k].entries.filter(function(e){ return e.status==="done" && !e.summary; })
-                                .slice(0, max || 4);
+  var fehlend = store[k].entries.filter(function(e){ return e.status==="done" && !e.summary && !e._ladefehler; })
+                                .slice(0, max || 6);
   if(!fehlend.length) return;
+  prefetching[k] = true;
+  var fertig = function(){
+    prefetching[k] = false;
+    if(k === kind){ store[k].lastSig = ""; render(); }
+  };
+
+  // Ein Aufruf für alle fehlenden Texte statt einer je Eintrag – spart Sekunden pro Abgleich.
+  if(kannSammeln && fehlend.length > 1){
+    var ids = fehlend.map(function(e){ return e.id; }).join(",");
+    apiFor(k, { action:"getmany", ids:ids }, { frist:30000 }).then(function(res){
+      if(res && res.ok && res.entries){
+        uebernehmeEintraege(k, res.entries);
+        fertig();
+        return;
+      }
+      if(res && /Unbekannte Aktion/i.test(String(res.error||""))){
+        kannSammeln = false;
+        try{ localStorage.setItem("kann_sammeln","0"); }catch(e){}
+      }
+      prefetching[k] = false;
+      prefetchEinzeln(k, fehlend, fertig);
+    }).catch(function(){ prefetching[k] = false; prefetchEinzeln(k, fehlend, fertig); });
+    return;
+  }
+  prefetchEinzeln(k, fehlend, fertig);
+}
+
+/* Rückfallebene: nacheinander, und immer bereit, dem Nutzer den Vortritt zu lassen. */
+function prefetchEinzeln(k, fehlend, fertig){
+  if(prefetching[k]) return;
   prefetching[k] = true;
   var chain = Promise.resolve();
   fehlend.forEach(function(e){
-    chain = chain.then(function(){ return ensureFull(e.id, k); });
+    chain = chain.then(function(){
+      if(vorrangOffen()) return new Promise(function(r){ setTimeout(r, 1500); });
+      return ensureFull(e.id, k);
+    });
   });
-  chain.then(function(){
-    prefetching[k] = false;
-    if(k === kind){ store[k].lastSig = ""; render(); }
-  }).catch(function(){ prefetching[k] = false; });
+  chain.then(fertig).catch(function(){ prefetching[k] = false; });
+}
+
+/* Frisch geholte Volltexte in den Bestand einsortieren. */
+function uebernehmeEintraege(k, entries){
+  var nach = {};
+  store[k].entries.forEach(function(e, i){ nach[String(e.id)] = i; });
+  entries.forEach(function(neu){
+    var i = nach[String(neu.id)];
+    if(i != null) store[k].entries[i] = neu;
+  });
+  saveCache(k);
 }
 
 /* api-Aufruf für eine bestimmte Art (unabhängig von der aktiven Ansicht).
    Die Art wird fest mitgegeben – wichtig, weil Aufrufe in der Warteschlange verzögert starten. */
-function apiFor(k, params){
-  return api(Object.assign({ kind:k }, params));
+function apiFor(k, params, opt){
+  return api(Object.assign({ kind:k }, params), opt);
 }
 
 /* Beim Start nur den sichtbaren Bereich laden – die anderen kommen beim Umschalten.
@@ -1953,18 +2360,21 @@ function setzeGelesen(id, wert, forKind){
   e.read = wert;
   saveCache(k);
   if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-  apiFor(k, { action:"read", id:id, value: wert ? "1" : "0" }).then(function(res){
+  apiFor(k, { action:"read", id:id, value: wert ? "1" : "0" }, { vorrang:true }).then(function(res){
     if(res && res.ok) return;
-    throw new Error((res && res.error) || "abgelehnt");
-  }).catch(function(){
+    // Der Server hat geantwortet und abgelehnt -> wirklich zurückdrehen.
     e.read = !wert; saveCache(k);
     if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-    toast("Archiv-Änderung konnte nicht gespeichert werden.", "err");
+    toast(fehlerKlartext((res && res.error) || "Archiv-Änderung abgelehnt.").text, "err");
+  }).catch(function(){
+    // Kein Netz: Änderung behalten und nachholen, sobald der Server wieder da ist.
+    aktionMerken(k, { action:"read", id:id, value: wert ? "1" : "0" });
   });
 }
 
 function setzeTagFilter(tag){
   S().tagFilter = (S().tagFilter === tag) ? "" : tag;
+  limitZuruecksetzen();
   S().lastSig = ""; render();
   window.scrollTo(0, 0);
 }
@@ -1974,7 +2384,7 @@ var suchTimer = null;
 function serverSuche(){
   var q = S().search, k = kind;
   if(!q || q.length < 2 || !cfg.endpoint || !cfg.secret){ S().serverIds = null; return; }
-  apiFor(k, { action:"search", q:q }).then(function(res){
+  apiFor(k, { action:"search", q:q }, { vorrang:true }).then(function(res){
     if(res && res.ok && store[k].search === q){
       var vorher = (store[k].serverIds||[]).length;
       store[k].serverIds = (res.ids||[]).map(String);
@@ -1986,6 +2396,7 @@ function serverSuche(){
 $("segRead").addEventListener("click", function(ev){
   var b = ev.target.closest("button"); if(!b) return;
   S().readFilter = b.getAttribute("data-read");
+  limitZuruecksetzen();
   updateToolbar(); S().lastSig = ""; render();
 });
 $("tagbar").addEventListener("click", function(ev){
@@ -1994,10 +2405,12 @@ $("tagbar").addEventListener("click", function(ev){
 });
 $("sortSel").addEventListener("change", function(){
   sortMode = this.value; localStorage.setItem("sortMode", sortMode);
+  limitZuruecksetzen();
   S().lastSig = ""; render();
 });
 $("zeitSel").addEventListener("change", function(){
   zeitFilter = parseInt(this.value,10)||0; localStorage.setItem("zeitFilter", String(zeitFilter));
+  limitZuruecksetzen();
   S().lastSig = ""; render();
 });
 
@@ -2075,17 +2488,23 @@ function fragenNachErlaubnis(){
   });
 }
 
-function zeigeFertigMeldung(e){
+/* Die Meldung bekommt jetzt ein Ziel mit (data). Ohne das wusste der Service Worker beim
+   Antippen nicht, welcher Eintrag gemeint war – und ohne notificationclick-Handler (siehe
+   service-worker.js) schloss Android nur das Benachrichtigungscenter, die Meldung blieb
+   stehen und die App kam nie nach vorn. */
+function zeigeFertigMeldung(e, k){
   if(!benachrichtigungenAktiv() || !("Notification" in window) || Notification.permission !== "granted") return;
   var titel = e.title || "Zusammenfassung fertig";
   var text = (e.summary || "").replace(/[*#]/g,"").slice(0,120);
+  var daten = { id:String(e.id), kind: k || e.kind || kind };
   try{
     if(navigator.serviceWorker && navigator.serviceWorker.ready){
       navigator.serviceWorker.ready.then(function(reg){
         reg.showNotification("✅ " + titel, { body: text || "Die Zusammenfassung ist fertig.",
-          icon:"icons/icon-192.png", badge:"icons/icon-192.png", tag:"zsf-"+e.id });
-      }).catch(function(){ new Notification("✅ " + titel, { body:text }); });
-    } else { new Notification("✅ " + titel, { body:text }); }
+          icon:"icons/icon-192.png", badge:"icons/icon-192.png", tag:"zsf-"+e.id,
+          renotify:true, data:daten });
+      }).catch(function(){ new Notification("✅ " + titel, { body:text, data:daten }); });
+    } else { new Notification("✅ " + titel, { body:text, data:daten }); }
   }catch(err){}
 }
 
@@ -2094,8 +2513,58 @@ function pruefeFertig(k, neueListe){
   neueListe.forEach(function(e){
     var schluessel = k + ":" + e.id;
     var vorher = letzterStatus[schluessel];
-    if(vorher && vorher !== "done" && e.status === "done") zeigeFertigMeldung(e);
+    if(vorher && vorher !== "done" && e.status === "done") zeigeFertigMeldung(e, k);
     letzterStatus[schluessel] = e.status;
+  });
+}
+
+/* Einen bestimmten Eintrag anzeigen und aufklappen – Ziel des Tippens auf eine Benachrichtigung. */
+function oeffneEintrag(id, k, schonGeladen){
+  id = String(id || "");
+  if(!id) return;
+  if(k && KINDS.indexOf(k) >= 0 && k !== kind) switchKind(k);
+  var st = S();
+  var e = st.entries.find(function(x){ return String(x.id)===id; });
+  if(!e){
+    // Der Eintrag ist noch nicht im Gerät – einmal nachladen, dann aufgeben (kein Kreisverkehr).
+    if(schonGeladen){ toast("Der Eintrag ist nicht mehr da.", "err"); return; }
+    refresh(kind, true).then(function(){ oeffneEintrag(id, null, true); });
+    return;
+  }
+  // Liegt der Eintrag schon im Archiv, würde der Filter "Offen" ihn verstecken.
+  if(e.read && st.readFilter === "offen"){ st.readFilter = "alle"; updateToolbar(); }
+  st.search = ""; $("searchInput").value = "";
+  st.tagFilter = "";
+  st.openCards[id] = true;
+  st.lastSig = ""; render(); reopen(id);
+  var c = document.querySelector('.card[data-id="'+CSS.escape(id)+'"]');
+  if(c) c.scrollIntoView({ block:"center" });
+  if(e.status === "done" && !e.summary){
+    ensureFull(id, kind, { vorrang:true }).then(function(){ S().lastSig=""; render(); reopen(id); });
+  }
+}
+
+/* Einmalige Selbstheilung: Fehler, die erfahrungsgemäß beim zweiten Anlauf verschwinden
+   (Gemini überlastet, leere Antwort), stößt die App selbst noch einmal an – aber GENAU EINMAL
+   pro Eintrag. Damit hängt nichts in einer Endlosschleife. */
+var autoNeu = {};
+try{ autoNeu = JSON.parse(localStorage.getItem("auto_retry") || "{}"); }catch(e){}
+function autoNeuMerken(s){
+  autoNeu[s] = 1;
+  var keys = Object.keys(autoNeu);
+  if(keys.length > 400){ keys.slice(0, keys.length - 300).forEach(function(x){ delete autoNeu[x]; }); }
+  try{ localStorage.setItem("auto_retry", JSON.stringify(autoNeu)); }catch(err){}
+}
+function autoWiederholen(k, liste){
+  liste.forEach(function(e){
+    if(e.status !== "error") return;
+    var s = k + ":" + e.id;
+    if(autoNeu[s]) return;
+    if(!fehlerKlartext(e.error).auto) return;
+    autoNeuMerken(s);
+    apiFor(k, { action:"retry", id:e.id }).then(function(res){
+      if(res && res.ok) setTimeout(function(){ refresh(k); }, 8000);
+    }).catch(function(){});
   });
 }
 
@@ -2110,6 +2579,7 @@ function updateTabsUI(){
   KINDS.forEach(function(k){ document.body.classList.toggle("kind-"+k, k===kind); });
 }
 function switchKind(k){
+  limitZuruecksetzen();
   if(k===kind) return;
   if(podMode) podStop();          // sonst bliebe die Podcast-Leiste ohne Inhalt stehen
   else if(tts.playing) ttsStop();
@@ -2149,7 +2619,8 @@ $("list").addEventListener("click", function(ev){
       // Volltext bei Bedarf nachladen (Liste enthält nur Metadaten)
       var e0 = S().entries.find(function(x){ return String(x.id)===String(id); });
       if(e0 && e0.status==="done" && !e0.summary){
-        ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
+        // vorrang: der Abruf überholt alles, was gerade im Hintergrund läuft
+        ensureFull(id, kind, { vorrang:true }).then(function(){ S().lastSig=""; render(); reopen(id); });
       }
     }
     else {
@@ -2184,7 +2655,7 @@ $("list").addEventListener("click", function(ev){
     var eR = S().entries.find(function(x){ return String(x.id)===String(id); });
     if(eR) delete eR._ladefehler;
     S().lastSig=""; render(); reopen(id);
-    ensureFull(id).then(function(){ S().lastSig=""; render(); reopen(id); });
+    ensureFull(id, kind, { vorrang:true }).then(function(){ S().lastSig=""; render(); reopen(id); });
     return;
   }
   if(act === "tts-full" || act === "tts-short"){
@@ -2199,10 +2670,14 @@ $("list").addEventListener("click", function(ev){
     toast("Gelöscht.", "ok");
     loescheEintrag(id);
   } else if(act === "retry"){
-    api({ action:"retry", id:id }).then(function(res){
+    var kR = kind;
+    api({ action:"retry", id:id }, { vorrang:true }).then(function(res){
       if(res && res.ok){ toast("Wird erneut versucht …", "ok"); refresh(); }
-      else toast((res && res.error) || "Erneuter Versuch nicht möglich.", "err");
-    }).catch(function(err){ toast(err.message, "err"); });
+      else toast(fehlerKlartext((res && res.error) || "Erneuter Versuch nicht möglich.").text, "err");
+    }).catch(function(){
+      aktionMerken(kR, { action:"retry", id:id });
+      toast("Kein Netz – wird nachgeholt, sobald der Server antwortet.", "ok");
+    });
   } else if(act === "ask"){
     submitQuestion(id, card.querySelector(".qain"));
   } else if(act === "copy"){
@@ -2281,16 +2756,77 @@ function submitQuestion(id, input){
   if(!e || e.status !== "done"){ toast("Erst wenn die Zusammenfassung fertig ist.", "err"); return; }
   if(input) input.disabled = true;
   toast("Frage wird beantwortet …");
-  api({ action:"ask", id:id, q:q }).then(function(res){
+  api({ action:"ask", id:id, q:q }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     if(res && res.ok){
       e.qa = res.qa || (e.qa||[]).concat([{ q:q, a:res.answer }]);
       S().qaDraft[id] = "";
       saveCache(kind);
       S().lastSig = ""; render(); reopen(id);
       toast("Antwort da.", "ok");
-    } else { if(input) input.disabled = false; toast((res&&res.error)||"Frage fehlgeschlagen.", "err"); }
-  }).catch(function(err){ if(input) input.disabled = false; toast(err.message, "err"); });
+    } else { if(input) input.disabled = false; toast(fehlerKlartext((res&&res.error)||"Frage fehlgeschlagen.").text, "err"); }
+  }).catch(function(err){ if(input) input.disabled = false; toast(fehlerKlartext(err.message).text, "err"); });
 }
+
+/* ----------------------- Aktionen offline merken ------------------------
+   Bisher deckte die Warteschlange nur "Hinzufügen" ab. Archivieren, Löschen und Erneut-Versuchen
+   scheiterten ohne Netz still und wurden zurückgedreht – die Änderung war weg, obwohl man sie
+   bewusst gemacht hatte. Jetzt wandert jede schreibende Aktion in diese Liste und wird
+   nachgeholt, sobald der Server wieder antwortet. */
+function aktionenGet(){ try{ return JSON.parse(localStorage.getItem("aktionen")||"[]"); }catch(e){ return []; } }
+function aktionenSet(a){ try{ localStorage.setItem("aktionen", JSON.stringify(a)); }catch(e){} }
+
+function aktionMerken(k, params){
+  var liste = aktionenGet();
+  // Dieselbe Aktion für denselben Eintrag ersetzt die vorherige (zweimal archivieren ist einmal).
+  liste = liste.filter(function(x){
+    return !(x.kind === k && x.params.action === params.action &&
+             String(x.params.id||"") === String(params.id||""));
+  });
+  liste.push({ nr: "a" + Date.now() + Math.random().toString(36).slice(2,7),
+               kind:k, params:params, zeit:Date.now() });
+  if(liste.length > 200) liste = liste.slice(-200);
+  aktionenSet(liste);
+  aktionenAnzeigen();
+}
+
+function aktionenAnzeigen(){
+  var n = aktionenGet().length + outboxGet().length;
+  var el = $("offenCount");
+  if(!el) return;
+  el.textContent = n ? ("↻ " + n + " wartet" + (n===1?"":"en") + " auf den Server") : "";
+  el.style.display = n ? "" : "none";
+}
+
+var aktionenLaufen = false;
+function aktionenSenden(){
+  if(aktionenLaufen) return Promise.resolve();
+  var liste = aktionenGet();
+  if(!liste.length){ aktionenAnzeigen(); return Promise.resolve(); }
+  if(!cfg.endpoint || !cfg.secret) return Promise.resolve();
+  aktionenLaufen = true;
+  var erledigt = {};   // nach Nummer, nicht nach Objekt: die Liste wird zwischendurch neu gelesen
+  var chain = Promise.resolve();
+  liste.forEach(function(x){
+    chain = chain.then(function(){
+      return apiFor(x.kind, x.params).then(function(res){
+        // Abgelehnt heißt beantwortet: nicht endlos wiederholen.
+        if(res && (res.ok || res.error)) erledigt[x.nr] = true;
+      }).catch(function(){});   // kein Netz -> bleibt liegen
+    });
+  });
+  return chain.then(function(){
+    var anzahl = Object.keys(erledigt).length;
+    aktionenSet(aktionenGet().filter(function(x){ return !erledigt[x.nr]; }));
+    aktionenLaufen = false;
+    aktionenAnzeigen();
+    if(anzahl) refresh(kind);
+  }).catch(function(){ aktionenLaufen = false; aktionenAnzeigen(); });
+}
+
+window.addEventListener("online", function(){
+  toast("Wieder online – hole das Wartende nach.", "ok");
+  processOutbox(); aktionenSenden(); refreshAll(false);
+});
 
 /* ---- Wischen zum Löschen + Lange drücken zum Auswählen ---- */
 $("list").addEventListener("touchstart", onTouchStart, { passive: true });
@@ -2361,15 +2897,18 @@ function loescheEintrag(id, forKind){
   arr.splice(pos, 1);
   saveCache(k);
   if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-  return apiFor(k, { action:"delete", id:id }).then(function(res){
+  return apiFor(k, { action:"delete", id:id }, { vorrang:true }).then(function(res){
     if(res && res.ok) return true;
-    throw new Error((res && res.error) || "Der Server hat abgelehnt.");
-  }).catch(function(err){
     arr.splice(Math.min(pos, arr.length), 0, kopie);          // zurück an die alte Stelle
     saveCache(k);
     if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-    toast("Nicht gelöscht (" + (err.message || "Serverfehler") + ") – der Eintrag ist wieder da.", "err");
+    toast("Nicht gelöscht: " + fehlerKlartext((res && res.error) || "abgelehnt").text +
+          " – der Eintrag ist wieder da.", "err");
     return false;
+  }).catch(function(){
+    // Kein Netz: gelöscht bleibt gelöscht, der Server erfährt es beim nächsten Mal.
+    aktionMerken(k, { action:"delete", id:id });
+    return true;
   });
 }
 
@@ -2478,7 +3017,7 @@ $("list").addEventListener("change", function(ev){
   }
   ev.target.disabled = true;
   toast("Übersetze nach "+lang+" …");
-  api({ action:"translate", id:id, lang:lang }).then(function(res){
+  api({ action:"translate", id:id, lang:lang }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     if(res && res.ok){
       e.translations = e.translations || {};
       e.translations[lang] = res.text;
@@ -2608,7 +3147,7 @@ $("testBtn").onclick = function(){
     if(el) el.textContent = Math.round((Date.now()-t0)/1000) + " s";
   }, 1000);
   var fertig = function(){ clearInterval(ticker); $("testBtn").disabled = false; };
-  api({ action:"ping" }).then(function(res){
+  api({ action:"ping" }, { vorrang:true, frist:60000, versuche:2 }).then(function(res){
     fertig();
     if(res && res.ok){ $("testLine").innerHTML = '<span style="color:var(--ok)">✓ Verbindung erfolgreich!</span>'; }
     else {
@@ -2646,6 +3185,70 @@ function updateNotice(){
     n.classList.remove("show");
   }
 }
+
+/* ------------------- Runterziehen zum Aktualisieren ---------------------
+   Vorher griff die Geste des Browsers: die lud nur die Seite neu und holte danach lediglich
+   den sichtbaren Bereich – der Knopf oben holt dagegen alle drei Bereiche. Jetzt macht die
+   Geste genau dasselbe wie der Knopf, ohne Seitenneuladen. */
+(function initPullToRefresh(){
+  var y0 = null, x0 = 0, zieh = 0, aktiv = false, laeuft = false;
+  var ind = document.createElement("div");
+  ind.className = "ptr";
+  ind.innerHTML = "<span>↻</span>";
+  document.body.appendChild(ind);
+  var SCHWELLE = 70;
+
+  function setz(px, weich){
+    ind.style.transition = weich ? "transform .25s ease, opacity .25s ease" : "";
+    ind.style.transform = "translate(-50%," + Math.min(px, 96) + "px)";
+    ind.style.opacity = String(Math.min(1, px / SCHWELLE));
+    ind.classList.toggle("bereit", px >= SCHWELLE);
+  }
+
+  window.addEventListener("touchstart", function(ev){
+    if(laeuft || !ev.touches || ev.touches.length !== 1) return;
+    if(window.scrollY > 0) return;
+    if(document.querySelector(".overlay.show")) return;
+    y0 = ev.touches[0].clientY; x0 = ev.touches[0].clientX; aktiv = false; zieh = 0;
+  }, { passive:true });
+
+  window.addEventListener("touchmove", function(ev){
+    if(y0 === null || laeuft) return;
+    var dy = ev.touches[0].clientY - y0, dx = ev.touches[0].clientX - x0;
+    if(!aktiv){
+      // Nur eindeutig senkrechtes Ziehen zählt – Wischen zum Löschen bleibt unberührt.
+      if(dy > 12 && Math.abs(dy) > Math.abs(dx) * 1.6 && window.scrollY <= 0){ aktiv = true; }
+      else if(Math.abs(dx) > 12 || dy < -8){ y0 = null; return; }
+      else return;
+    }
+    zieh = Math.max(0, dy * 0.5);
+    setz(zieh);
+    if(ev.cancelable) ev.preventDefault();
+  }, { passive:false });
+
+  function ende(){
+    if(y0 === null) return;
+    y0 = null;
+    if(!aktiv){ setz(0, true); return; }
+    aktiv = false;
+    suppressClickUntil = Date.now() + 400;   // sonst klappt die Karte unter dem Finger auf
+    if(zieh < SCHWELLE){ setz(0, true); return; }
+    laeuft = true;
+    ind.classList.add("laeuft");
+    setz(SCHWELLE);
+    var t0 = Date.now();
+    Promise.all(KINDS.map(function(k){ return refresh(k, k === kind); })).then(function(){
+      // kurz stehen lassen, sonst wirkt ein schneller Abruf wie "nichts passiert"
+      setTimeout(function(){
+        laeuft = false;
+        ind.classList.remove("laeuft", "bereit");
+        setz(0, true);
+      }, Math.max(0, 450 - (Date.now() - t0)));
+    });
+  }
+  window.addEventListener("touchend", ende);
+  window.addEventListener("touchcancel", ende);
+})();
 
 /* ------------------------- Geteilte Links empfangen --------------------- */
 function handleShareTarget(){
@@ -2685,6 +3288,24 @@ function flushPendingShares(){
   if(byKind.news.length) addLinks("news", byKind.news);
 }
 
+/* Ziel einer angetippten Benachrichtigung: entweder meldet es der Service Worker an die
+   bereits laufende App, oder die App startet neu mit ?open=bereich:id in der Adresse. */
+function handleOpenTarget(){
+  var p = new URLSearchParams(location.search);
+  var wert = p.get("open");
+  if(!wert) return;
+  history.replaceState(null, "", location.pathname);
+  var teile = String(wert).split(":");
+  var k = teile.shift(), id = teile.join(":");
+  setTimeout(function(){ oeffneEintrag(id, k); }, 0);
+}
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.addEventListener("message", function(ev){
+    var d = ev.data || {};
+    if(d.open) oeffneEintrag(d.open, d.kind);
+  });
+}
+
 /* ------------------------------- Init ----------------------------------- */
 $("addBtn").onclick = function(){
   var v = $("addInput").value;
@@ -2692,12 +3313,14 @@ $("addBtn").onclick = function(){
   addMixed(v);
 };
 $("refreshBtn").onclick = function(){ toast("Aktualisiere …"); refreshAll(true); };
+/* Zurück im Vordergrund nach längerer Pause: nicht nur der sichtbare Bereich, sondern alles –
+   sonst stehen die Zähler der anderen Reiter auf altem Stand. */
 /* Sofort in der YouTube-Playlist nachsehen (sonst passiert das ohnehin jede Minute). */
 $("plScanBtn").onclick = function(){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var b = $("plScanBtn"); b.disabled = true;
   toast("Sehe in der Playlist nach …");
-  apiFor("yt", { action:"scan" }).then(function(res){
+  apiFor("yt", { action:"scan" }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     b.disabled = false;
     if(res && res.ok){
       toast(res.added ? (res.added + (res.added===1?" Video":" Videos") + " übernommen – wird jetzt zusammengefasst.")
@@ -2711,7 +3334,7 @@ $("scanBtn").onclick = function(){
   if(!cfg.endpoint || !cfg.secret){ openSettings(); toast("Bitte zuerst die Verbindung einrichten.", "err"); return; }
   var b = $("scanBtn"); b.disabled = true;
   toast("Sehe in Gmail nach …");
-  api({ action:"scan" }).then(function(res){
+  api({ action:"scan" }, { vorrang:true, frist:60000, versuche:1 }).then(function(res){
     b.disabled = false;
     if(res && res.ok){
       toast(res.added ? (res.added + (res.added===1?" Mail":" Mails") + " übernommen – wird jetzt zusammengefasst.")
@@ -2723,6 +3346,7 @@ $("scanBtn").onclick = function(){
 $("searchInput").addEventListener("input", function(){
   S().search = this.value.trim();
   S().serverIds = null;
+  limitZuruecksetzen();
   render();
   if(suchTimer) clearTimeout(suchTimer);
   suchTimer = setTimeout(serverSuche, 600);   // Server erst nach kurzer Tippause fragen
@@ -2791,10 +3415,46 @@ $("searchInput").value = S().search || "";
 render();
 updateNotice();
 handleShareTarget();
+handleOpenTarget();
 flushPendingShares();
 initHistory();
+aktionenAnzeigen();
 refreshActive();   // nur der sichtbare Bereich – die anderen beim Umschalten
 processOutbox();   // beim letzten Mal nicht abgeschickte Links nachreichen
+aktionenSenden();  // Archivieren/Löschen, das ohne Netz liegen geblieben ist
+
+/* Alt-Bestand einmalig nach IndexedDB umziehen, danach von dort nachladen. Beides läuft nach
+   dem ersten Zeichnen – der Start bleibt dadurch so schnell wie vorher. */
+setTimeout(function(){
+  KINDS.forEach(function(k){
+    if(store[k].entries.some(function(e){ return e.summary; })) dbSchreiben(store[k].cacheKey, store[k].entries);
+  });
+  ladeVolltexteAusDb();
+}, 0);
+
+/* Dem Service Worker sagen, wie er den Server erreicht – damit er auch bei geschlossener App
+   nach fertigen Zusammenfassungen sehen kann (siehe Hintergrund-Abgleich unten). */
+function meldeZugangAnSW(){
+  if(!("serviceWorker" in navigator) || !cfg.endpoint || !cfg.secret) return;
+  navigator.serviceWorker.ready.then(function(reg){
+    if(reg.active) reg.active.postMessage({ typ:"zugang", endpoint:cfg.endpoint, secret:cfg.secret });
+  }).catch(function(){});
+}
+
+/* Hintergrund-Abgleich: Chrome erlaubt installierten PWAs, in Ruhephasen kurz aufzuwachen.
+   Damit meldet die App fertige Zusammenfassungen auch dann, wenn sie geschlossen ist –
+   bisher ging das nur, solange sie offen war. */
+function melderEinrichten(){
+  meldeZugangAnSW();
+  if(!("serviceWorker" in navigator) || !("periodicSync" in ServiceWorkerRegistration.prototype)) return;
+  navigator.permissions.query({ name:"periodic-background-sync" }).then(function(st){
+    if(st.state !== "granted") return;
+    return navigator.serviceWorker.ready.then(function(reg){
+      return reg.periodicSync.register("zsf-check", { minInterval: 15 * 60 * 1000 });
+    });
+  }).catch(function(){});
+}
+setTimeout(melderEinrichten, 1500);
 </script>
 </body>
 </html>
