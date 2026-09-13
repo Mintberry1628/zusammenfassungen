@@ -64,6 +64,7 @@ Signaturfarbe wechselt dabei (Rot für Videos, Blau für News), damit du immer w
 ```
 apps-script/
   Code.gs               Backend: Queue, Hintergrund-Verarbeitung, Gemini, Metadaten, setup()
+                        (ohne Geheimnisse – die liegen in den Skript-Eigenschaften)
   appsscript.json       Manifest (Web-App-Zugriff, Berechtigungen)
 web/
   index.html            Komplette App (UI + Teilen-Handler + Backend-Aufrufe)
@@ -81,6 +82,15 @@ README.md               Diese Übersicht
   Videos gehen direkt als Link über `generateContent` (`file_data`/`file_uri`); Artikel werden
   als extrahierter Fliesstext übergeben.
 - **Speicher:** eine Google-Tabelle mit drei Blättern („YouTube", „News", „Mail" – je eine Zeile pro Eintrag).
+  Auf dem Handy liegen die Zusammenfassungen in **IndexedDB** (unbegrenzt genug, asynchron);
+  im `localStorage` steht nur die schlanke Liste für den Soforteindruck beim Start.
+- **Geheimnisse:** Gemini-Schlüssel und Passwort stehen in den **Skript-Eigenschaften** des
+  Apps-Script-Projekts, nicht im Code – deshalb liegt `apps-script/Code.gs` mit im Repository.
+  Gesetzt werden sie einmalig über `zugangsdatenSetzen()` (siehe SETUP.md, Schritt 1b).
+- **Übertragung:** bevorzugt `fetch` (abbrechbar, echter HTTP-Status); scheitert das an CORS,
+  schaltet die App automatisch auf JSONP um und prüft `fetch` am nächsten Tag erneut.
+- **Robustheit:** Aussetzer werden still wiederholt; Archivieren, Löschen und „Erneut versuchen"
+  wandern ohne Netz in eine Warteschlange und werden nachgeholt.
 - **Mails:** Apps Script liest per `GmailApp` die Unterhaltungen mit dem Label `MAIL_LABEL`
   (Standard „Zusammenfassen"), übernimmt sie und entfernt das Label. Anhänge gehen als
   `inline_data` an Gemini (PDF/Bilder/Text, Gesamtgröße gedeckelt über `MAIL_ATTACHMENT_MAX_BYTES`).

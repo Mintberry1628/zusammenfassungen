@@ -55,6 +55,24 @@ Fertig – oben in der App erscheint der Umschalter **🎬 YouTube / 📰 Web / 
 > Dieser Schlüssel ist kostenlos. Grenzen der Gratis-Stufe: nur **öffentliche** Videos,
 > ca. **8 Stunden Video pro Tag**, sehr lange Videos (> ~90 Min) können abgelehnt werden.
 
+### Schritt 1b: Schlüssel und Passwort hinterlegen (nicht mehr im Code!)
+
+Seit der Umstellung stehen Gemini-Schlüssel und Passwort **nicht mehr in `Code.gs`**, sondern in
+den **Skript-Eigenschaften**. Dadurch lässt sich `Code.gs` gefahrlos sichern und versionieren –
+ein verlorener PC kostet dich das Backend nicht mehr.
+
+So setzt du sie (im Apps-Script-Editor):
+1. Oben in `Code.gs` die Funktion **`zugangsdatenSetzen()`** suchen.
+2. Die drei Werte darin eintragen (`GEMINI_API_KEY`, `SHARED_SECRET`, optional `YT_API_KEY`).
+3. Oben im Dropdown **`zugangsdatenSetzen`** wählen → **Ausführen**.
+4. Die Werte in der Funktion wieder **leeren** und speichern.
+5. Zur Kontrolle **`zugangsdatenPruefen()`** ausführen – das Protokoll zeigt „hinterlegt",
+   ohne die Werte selbst auszugeben.
+
+Alternativ von Hand: **Projekteinstellungen** (Zahnrad links) → ganz unten
+**Skripteigenschaften** → **Eigenschaft hinzufügen** → Name `GEMINI_API_KEY`, Wert einfügen;
+dasselbe für `SHARED_SECRET`.
+
 ### Schritt 2: Apps-Script-Projekt anlegen
 
 1. Öffne **<https://script.google.com>** und klicke **„Neues Projekt"**.
@@ -236,7 +254,8 @@ YouTube-Links nach 🎬 und alle anderen nach 📰 – auch bei gemischten Liste
     (siehe „Ich habe den Code später geändert"), dann „Erneut versuchen".
 
 **Fehler: „Gemini-Fehler HTTP 403: The caller does not have permission".**
-Das ist **immer** der API-Schlüssel im Apps Script, nie das Video. Der Reihe nach prüfen:
+Das ist **immer** der API-Schlüssel, nie das Video. Der Reihe nach prüfen
+(Schlüssel danach mit `zugangsdatenSetzen()` neu hinterlegen, siehe Schritt 1b):
 1. **Schlüssel eingeschränkt?** Öffne
    [console.cloud.google.com → APIs & Dienste → Anmeldedaten](https://console.cloud.google.com/apis/credentials),
    klicke den Schlüssel an. Steht bei **„Anwendungseinschränkungen"** etwas anderes als **„Keine"**
@@ -247,28 +266,22 @@ Das ist **immer** der API-Schlüssel im Apps Script, nie das Video. Der Reihe na
 3. **API aktiviert?** [Generative Language API aktivieren](https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com)
    – im **selben** Projekt, zu dem der Schlüssel gehört.
 4. Hilft nichts davon: unter [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-   einen **neuen Schlüssel** erzeugen, oben in `Code.gs` bei `GEMINI_KEY` eintragen, speichern,
-   in der App „Erneut versuchen".
+   einen **neuen Schlüssel** erzeugen und ihn per `zugangsdatenSetzen()` hinterlegen (Schritt 1b),
+   dann in der App „Erneut versuchen".
 
 **Fehler: „Von Gemini abgelehnt (STOP)."**
-Gemini hat geantwortet, aber **keinen Text** mitgeschickt. Der häufigste Grund ist hausgemacht:
-`gemini-2.5-flash` denkt vor der Antwort nach, und diese Denk-Schritte zählen gegen
-`maxOutputTokens`. Ist das Limit knapp, ist das Kontingent nach dem Nachdenken aufgebraucht –
-die Antwort bleibt leer, `finishReason` ist trotzdem `STOP`. Abhilfe in `apps-script/Code.gs`,
-im `generationConfig` des Gemini-Aufrufs:
+Gemini hat geantwortet, aber **keinen Text** mitgeschickt. Der Grund war hausgemacht:
+`gemini-2.5-flash` denkt vor der Antwort nach, und diese Denk-Schritte zählen gegen das
+Ausgabe-Budget. War es aufgebraucht, blieb die Antwort leer – `finishReason` trotzdem `STOP`.
 
-```js
-generationConfig: {
-  temperature: 0.3,
-  maxOutputTokens: 8192,          // großzügig, nicht 1024/2048
-  thinkingConfig: { thinkingBudget: 0 }   // schaltet das Vordenken ab
-}
-```
+**Ist im Backend behoben:** `callGemini()` setzt jetzt `maxOutputTokens: 8192` und
+`thinkingConfig: { thinkingBudget: 0 }` (Konstanten `MAX_OUTPUT_TOKENS` und `THINKING_BUDGET`
+oben in `Code.gs`). Kommt trotzdem einmal eine leere Antwort, fasst das Skript automatisch ohne
+Denk-Budget nach, und die App startet zusätzlich **einmal** einen zweiten Versuch.
 
-Danach speichern und in der App „Erneut versuchen". Die App startet bei diesem Fehler
-inzwischen **einmal automatisch** einen zweiten Versuch – bleibt es dabei, liegt es an einer der
-anderen Ursachen: Video über ~90 Minuten, Altersfreigabe, Ländersperre oder nicht öffentlich.
-Dann hilft der Weg über **„📝 Eigener Text"** in der Karte (Transkript einfügen).
+Bleibt es dabei, liegt es an einer der anderen Ursachen: Video über ~90 Minuten, Altersfreigabe,
+Ländersperre oder nicht öffentlich. Dann hilft der Weg über **„📝 Eigener Text"** in der Karte
+(Transkript einfügen).
 
 **Video bleibt lange bei ⏳ / „wird zusammengefasst".**
 - Normal sind ein paar Minuten. Es wird **ein Video pro Minute** verarbeitet (so bleibt jeder

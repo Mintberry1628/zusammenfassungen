@@ -168,6 +168,10 @@
     display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:18px;
     opacity:0; pointer-events:none; transform:translate(-50%,0)}
   .ptr.bereit{color:var(--accent); border-color:var(--accent)}
+  /* Marke am Listenende: sobald sie in Sicht kommt, werden weitere Karten gebaut */
+  .mehr{text-align:center; color:var(--muted); font-size:12.5px; padding:14px 0 22px}
+  /* Zähler für Aktionen, die noch zum Server müssen */
+  .offen{font-size:12px; color:var(--warn); text-align:center; padding:0 0 10px; display:none}
   .ptr.laeuft span{display:block; animation:ptrspin .9s linear infinite}
   @keyframes ptrspin{to{transform:rotate(360deg)}}
 
@@ -338,6 +342,7 @@
 
 <main>
   <div class="notice" id="notice"></div>
+  <div class="offen" id="offenCount"></div>
 
   <div class="addbar" id="addbar">
     <textarea id="addInput"></textarea>
@@ -539,7 +544,9 @@ var cfg = {
 
 /* Zwei getrennte Datensätze (YouTube / News), jeder mit eigenem UI-Zustand. */
 function mkState(cacheKey){
-  return { entries: JSON.parse(localStorage.getItem(cacheKey)||"[]"),
+  var roh = [];
+  try{ roh = JSON.parse(localStorage.getItem(cacheKey)||"[]"); }catch(e){ roh = []; }
+  return { entries: roh,
     viewLang:{}, openCards:{}, qaDraft:{}, selected:{}, lastSig:"", search:"", cacheKey:cacheKey,
     // Beim Start immer "Offen": Was schon gehört wurde, soll nicht wieder im Weg stehen.
     readFilter:"offen", tagFilter:"", serverIds:null, textOffen:{}, textDraft:{} };
@@ -637,10 +644,73 @@ function apiMitWiederholung(params, opt, versuch){
   });
 }
 
-/* JSONP-Aufruf an Apps Script (umgeht CORS zuverlässig). kind wird automatisch mitgesendet.
-   Die Frist ist kürzer als früher (60 s): eine hängende Anfrage darf die Warteschlange nicht
-   minutenlang blockieren – lieber schnell abbrechen und neu versuchen. */
+/* ---------------------------- Übertragungsweg ---------------------------
+   Bevorzugt wird fetch: nur damit lässt sich eine Anfrage wirklich ABBRECHEN (AbortController),
+   nur damit gibt es einen echten HTTP-Status. JSONP kann beides nicht – ein hängender
+   <script>-Tag lädt weiter, auch wenn niemand mehr auf ihn wartet.
+   Klappt fetch nicht (CORS-Eigenheiten mancher Apps-Script-Bereitstellungen), schaltet die App
+   dauerhaft auf JSONP um und probiert fetch erst am nächsten Tag wieder. */
+var WEG = { art: localStorage.getItem("weg_art") || "auto",
+            seit: parseInt(localStorage.getItem("weg_seit") || "0", 10) || 0 };
+var fetchFehler = 0;
+
+function wegJsonp(){
+  if(WEG.art !== "jsonp") return false;
+  if(Date.now() - WEG.seit > 24*3600*1000){ wegSetzen("auto"); return false; }   // täglich neu prüfen
+  return true;
+}
+function wegSetzen(art){
+  WEG.art = art; WEG.seit = Date.now(); fetchFehler = 0;
+  try{ localStorage.setItem("weg_art", art); localStorage.setItem("weg_seit", String(WEG.seit)); }catch(e){}
+}
+
+function baueUrl(params, extra){
+  var q = Object.assign({ kind: kind }, params, { token: cfg.secret }, extra || {});
+  var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+"="+encodeURIComponent(q[k]); }).join("&");
+  return cfg.endpoint + (cfg.endpoint.indexOf("?")>-1?"&":"?") + qs;
+}
+
 function apiRaw(params, opt){
+  opt = opt || {};
+  if(!cfg.endpoint || !cfg.secret) return Promise.reject(new Error("NO_CONFIG"));
+  if(wegJsonp()) return apiJsonp(params, opt);
+  return apiFetch(params, opt).catch(function(err){
+    if(err && err.abgebrochen) throw err;
+    // Offline ist kein Grund, den Weg zu wechseln – da scheitert JSONP genauso.
+    if(navigator.onLine === false) throw err;
+    if(err && err.blockiert){
+      fetchFehler++;
+      if(fetchFehler >= 2) wegSetzen("jsonp");
+      return apiJsonp(params, opt);
+    }
+    throw err;
+  });
+}
+
+function apiFetch(params, opt){
+  var ctrl = ("AbortController" in window) ? new AbortController() : null;
+  var abgelaufen = false;
+  var timer = setTimeout(function(){ abgelaufen = true; if(ctrl) ctrl.abort(); }, opt.frist || 25000);
+  return fetch(baueUrl(params), { method:"GET", signal: ctrl ? ctrl.signal : undefined,
+                                  credentials:"omit", redirect:"follow" })
+    .then(function(r){
+      clearTimeout(timer);
+      if(!r.ok){ var e = new Error("Server antwortet mit HTTP " + r.status + "."); e.status = r.status; throw e; }
+      return r.json();
+    })
+    .then(function(j){ fetchFehler = 0; if(WEG.art !== "fetch") wegSetzen("fetch"); return j; })
+    .catch(function(err){
+      clearTimeout(timer);
+      if(abgelaufen){ var t = new Error("Zeitüberschreitung – Server antwortet gerade nicht."); throw t; }
+      // TypeError = CORS oder Netz; SyntaxError = HTML statt JSON (Apps-Script-Fehlerseite)
+      if(err && (err.name === "TypeError" || err.name === "SyntaxError")) err.blockiert = true;
+      throw err;
+    });
+}
+
+/* JSONP als Rückfallebene (umgeht CORS zuverlässig). Die Frist ist kürzer als früher (60 s):
+   eine hängende Anfrage darf die Warteschlange nicht minutenlang blockieren. */
+function apiJsonp(params, opt){
   opt = opt || {};
   return new Promise(function(resolve, reject){
     if(!cfg.endpoint || !cfg.secret){ reject(new Error("NO_CONFIG")); return; }
@@ -650,9 +720,7 @@ function apiRaw(params, opt){
                            opt.frist || 25000);
     function cleanup(){ clearTimeout(timer); delete window[cb]; if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
-    var q = Object.assign({ kind: kind }, params, { token: cfg.secret, callback: cb });
-    var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+"="+encodeURIComponent(q[k]); }).join("&");
-    script.src = cfg.endpoint + (cfg.endpoint.indexOf("?")>-1?"&":"?") + qs;
+    script.src = baueUrl(params, { callback: cb });
     script.onerror = function(){ cleanup(); reject(new Error("Netzwerkfehler beim Aufruf des Backends.")); };
     document.body.appendChild(script);
   });
@@ -1351,6 +1419,42 @@ function fmtCount(n){
 }
 var STATUS_LABEL = { pending:"⏳ in Warteschlange", processing:"⚙️ wird zusammengefasst", done:"✅ fertig", error:"⚠️ Fehler" };
 
+/* Der Server arbeitet EINEN Eintrag pro Minute ab. Aus der eigenen Liste lässt sich damit
+   ausrechnen, wann dieser hier dran ist – das beantwortet die Frage "hängt das?" ohne Raten. */
+function warteplatz(e){
+  var offen = store[e.kind || kind] ? store[e.kind || kind].entries : S().entries;
+  var reihe = offen.filter(function(x){ return x.status==="pending" || x.status==="processing"; })
+                   .slice().reverse();   // älteste zuerst – so arbeitet der Server sie ab
+  var i = reihe.findIndex(function(x){ return String(x.id)===String(e.id); });
+  return { platz: i + 1, gesamt: reihe.length };
+}
+
+function wartetext(e){
+  var w = warteplatz(e);
+  var teile = [];
+  if(e.status === "processing") teile.push("Wird gerade zusammengefasst.");
+  else if(w.platz > 0 && w.gesamt > 1) teile.push("Platz " + w.platz + " von " + w.gesamt + " in der Warteschlange.");
+  else teile.push("Wird als Nächstes zusammengefasst.");
+  if(w.platz > 1) teile.push("Etwa " + w.platz + " Minute" + (w.platz===1?"":"n") + ".");
+  var v = parseInt(e.attempts, 10) || 0;
+  if(v > 1) teile.push("Versuch " + v + " von 3.");
+  return teile.join(" ");
+}
+
+/* Kurzfassung für die Statuszeile auf der Karte. */
+function statusBadge(e){
+  var st = e.status || "pending";
+  if(st === "pending"){
+    var w = warteplatz(e);
+    if(w.platz > 1 && w.gesamt > 1) return "⏳ Platz " + w.platz + " von " + w.gesamt;
+  }
+  if(st === "processing"){
+    var v = parseInt(e.attempts, 10) || 0;
+    if(v > 1) return "⚙️ wird zusammengefasst (Versuch " + v + ")";
+  }
+  return STATUS_LABEL[st] || st;
+}
+
 function signature(arr){
   return arr.map(function(e){
     return e.id+":"+e.status+":"+((e.title||"").length)+":"+((e.summary||"").length)+":"+(e.durationText||"")+
@@ -1401,9 +1505,45 @@ function render(){
     list.innerHTML = '<div class="empty"><div class="big">🔍</div>'+grund+'</div>';
     return;
   }
-  list.innerHTML = shown.map(cardHtml).join("");
+  /* Nur den sichtbaren Anfang bauen, der Rest kommt beim Scrollen nach.
+     Vorher wurde bei JEDEM Abgleich die komplette Liste als HTML neu erzeugt – bei ein paar
+     hundert Einträgen ruckelt das spürbar, obwohl nur drei Karten auf den Schirm passen.
+     Aufgeklappte Karten zählen immer dazu, damit nichts unter dem Finger verschwindet. */
+  var noetig = 0;
+  shown.forEach(function(e, i){ if(S().openCards[e.id]) noetig = i + 1; });
+  var grenze = Math.max(sichtbarLimit, noetig);
+  var teil = shown.slice(0, grenze);
+  list.innerHTML = teil.map(cardHtml).join("") +
+    (shown.length > grenze
+      ? '<div class="mehr" id="mehrMarke">' + (shown.length - grenze) + ' weitere …</div>'
+      : "");
+  beobachteMehr();
   window.scrollTo(0, y);
 }
+
+/* Wie viele Karten gerade gebaut werden. Wächst beim Scrollen, springt bei jedem Filterwechsel
+   zurück auf den Anfang. */
+var SEITE = 25;
+var sichtbarLimit = SEITE;
+var mehrBeobachter = null;
+
+function beobachteMehr(){
+  var marke = $("mehrMarke");
+  if(!marke) return;
+  if(!("IntersectionObserver" in window)){   // sehr alte Browser: einfach alles zeigen
+    sichtbarLimit += SEITE; S().lastSig = ""; render(); return;
+  }
+  if(mehrBeobachter) mehrBeobachter.disconnect();
+  mehrBeobachter = new IntersectionObserver(function(eintraege){
+    if(!eintraege.some(function(x){ return x.isIntersecting; })) return;
+    sichtbarLimit += SEITE;
+    S().lastSig = "";
+    render();
+  }, { rootMargin: "600px" });
+  mehrBeobachter.observe(marke);
+}
+
+function limitZuruecksetzen(){ sichtbarLimit = SEITE; }
 
 /* Wendet Suche, Gelesen-Filter, Schlagwort, Zeitraum und Sortierung an. */
 function sichtbareEintraege(){
@@ -1459,7 +1599,7 @@ function tagsHtml(e){
 
 function mailCardHtml(e){
   var st = e.status || "pending";
-  var badge = STATUS_LABEL[st] || st;
+  var badge = statusBadge(e);
   var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
 
   var stats = [];
@@ -1519,7 +1659,8 @@ function commonBody(e, openLabel){
     bodyInner = '<div class="ttsbar" data-id="'+esc(e.id)+'">'+ttsBarInner(e.id)+'</div>'+
                 '<div class="summary">'+renderMarkdown(text)+'</div>' + qaHtml(e);
   } else {
-    bodyInner = '<p style="color:var(--muted)">Wird im Hintergrund verarbeitet – das geschieht automatisch, du musst nichts tun.</p>';
+    bodyInner = '<p style="color:var(--muted)">' + wartetext(e) +
+      ' Das geschieht automatisch, du musst nichts tun.</p>';
   }
   return '<div class="body">'+
     bodyInner+
@@ -1540,7 +1681,7 @@ function commonBody(e, openLabel){
 
 function ytCardHtml(e){
   var st = e.status || "pending";
-  var badge = STATUS_LABEL[st] || st;
+  var badge = statusBadge(e);
   var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
   var dur = e.durationText ? '<span class="dur">'+esc(e.durationText)+'</span>' : "";
 
@@ -1575,7 +1716,7 @@ function ytCardHtml(e){
 
 function newsCardHtml(e){
   var st = e.status || "pending";
-  var badge = STATUS_LABEL[st] || st;
+  var badge = statusBadge(e);
   var spin = (st==="processing"||st==="pending") ? '<span class="spin"></span> ' : "";
 
   var thumb = e.image
@@ -1735,16 +1876,91 @@ setInterval(function(){
   }
 }, 1000);
 
-/* Zwischenspeicher schreiben – bei Platzmangel die ältesten Volltexte opfern. */
-function saveCache(k){
-  try{
-    localStorage.setItem(store[k].cacheKey, JSON.stringify(store[k].entries));
-  }catch(err){
-    var schlank = store[k].entries.map(function(e, i){
-      return i < 30 ? e : Object.assign({}, e, { summary:"", qa:[], light:true });
+/* --------------------------- Zwischenspeicher ---------------------------
+   Zwei Ebenen, aus gutem Grund:
+   • localStorage hält nur die schlanke Liste (ohne Zusammenfassungen). Sie wird beim Start
+     synchron gelesen, damit sofort etwas auf dem Bildschirm steht.
+   • IndexedDB hält die Volltexte. localStorage ist synchron (blockiert also das Zeichnen) und
+     bei ~5 MB voll – dann warf die App die ältesten Zusammenfassungen weg. IndexedDB hat beides
+     nicht: asynchron und um Größenordnungen größer. */
+var DB_NAME = "zusammenfassungen", DB_STORE = "cache", DB_VERSION = 1;
+var dbOffen = null;
+
+function dbHole(){
+  if(dbOffen) return dbOffen;
+  dbOffen = new Promise(function(res, rej){
+    if(!("indexedDB" in window)){ rej(new Error("kein IndexedDB")); return; }
+    var req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = function(){
+      var db = req.result;
+      if(!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+    };
+    req.onsuccess = function(){ res(req.result); };
+    req.onerror = function(){ rej(req.error || new Error("IndexedDB nicht verfügbar")); };
+  }).catch(function(err){ dbOffen = null; throw err; });
+  return dbOffen;
+}
+
+function dbSchreiben(schluessel, wert){
+  return dbHole().then(function(db){
+    return new Promise(function(res, rej){
+      var t = db.transaction(DB_STORE, "readwrite");
+      t.objectStore(DB_STORE).put(wert, schluessel);
+      t.oncomplete = function(){ res(true); };
+      t.onerror = function(){ rej(t.error); };
     });
-    try{ localStorage.setItem(store[k].cacheKey, JSON.stringify(schlank)); }catch(e2){}
+  }).catch(function(){ return false; });
+}
+
+function dbLesen(schluessel){
+  return dbHole().then(function(db){
+    return new Promise(function(res, rej){
+      var t = db.transaction(DB_STORE, "readonly");
+      var r = t.objectStore(DB_STORE).get(schluessel);
+      r.onsuccess = function(){ res(r.result || null); };
+      r.onerror = function(){ rej(r.error); };
+    });
+  }).catch(function(){ return null; });
+}
+
+/* Für den Soforteindruck beim Start: dieselbe Liste, nur ohne die großen Textfelder. */
+function schlankeListe(entries){
+  return entries.map(function(e){
+    return Object.assign({}, e, { summary:"", qa:[], translations:{}, light:true });
+  });
+}
+
+function saveCache(k){
+  var entries = store[k].entries;
+  dbSchreiben(store[k].cacheKey, entries);                 // Volltexte (asynchron, großzügig)
+  try{
+    localStorage.setItem(store[k].cacheKey, JSON.stringify(schlankeListe(entries)));
+  }catch(err){
+    // Selbst die schlanke Liste passt nicht mehr: auf die neuesten 200 kürzen.
+    try{ localStorage.setItem(store[k].cacheKey, JSON.stringify(schlankeListe(entries).slice(0, 200))); }catch(e2){}
   }
+}
+
+/* Nach dem ersten Zeichnen die Volltexte aus IndexedDB nachziehen (inkl. Alt-Bestand, der
+   noch komplett im localStorage lag). */
+function ladeVolltexteAusDb(){
+  return Promise.all(KINDS.map(function(k){
+    return dbLesen(store[k].cacheKey).then(function(gespeichert){
+      if(!gespeichert || !gespeichert.length) return;
+      var voll = {};
+      gespeichert.forEach(function(e){ if(e && e.summary) voll[String(e.id)] = e; });
+      var geaendert = false;
+      store[k].entries.forEach(function(e, i){
+        var v = voll[String(e.id)];
+        if(v && !e.summary && String(v.processedAt) === String(e.processedAt)){
+          store[k].entries[i] = Object.assign({}, v, { light:false });
+          delete store[k].entries[i].light;
+          geaendert = true;
+        }
+      });
+      if(geaendert && k === kind){ store[k].lastSig = ""; render(); }
+    });
+  }));
 }
 
 /* Noch nicht abgeschickte Platzhalter oben behalten, damit sie beim Aktualisieren
@@ -1801,24 +2017,63 @@ function refresh(k, laut){
 /* Lädt im Hintergrund die Volltexte der neuesten Einträge nach (wenige, nacheinander),
    damit Antippen und Suche sofort greifen. Ältere kommen beim Öffnen dazu. */
 var prefetching = {};
+var kannSammeln = (localStorage.getItem("kann_sammeln") !== "0");   // altes Backend kennt getmany nicht
+
 function prefetchNewest(k, max){
   if(prefetching[k]) return;
   var fehlend = store[k].entries.filter(function(e){ return e.status==="done" && !e.summary && !e._ladefehler; })
-                                .slice(0, max || 4);
+                                .slice(0, max || 6);
   if(!fehlend.length) return;
+  prefetching[k] = true;
+  var fertig = function(){
+    prefetching[k] = false;
+    if(k === kind){ store[k].lastSig = ""; render(); }
+  };
+
+  // Ein Aufruf für alle fehlenden Texte statt einer je Eintrag – spart Sekunden pro Abgleich.
+  if(kannSammeln && fehlend.length > 1){
+    var ids = fehlend.map(function(e){ return e.id; }).join(",");
+    apiFor(k, { action:"getmany", ids:ids }, { frist:30000 }).then(function(res){
+      if(res && res.ok && res.entries){
+        uebernehmeEintraege(k, res.entries);
+        fertig();
+        return;
+      }
+      if(res && /Unbekannte Aktion/i.test(String(res.error||""))){
+        kannSammeln = false;
+        try{ localStorage.setItem("kann_sammeln","0"); }catch(e){}
+      }
+      prefetching[k] = false;
+      prefetchEinzeln(k, fehlend, fertig);
+    }).catch(function(){ prefetching[k] = false; prefetchEinzeln(k, fehlend, fertig); });
+    return;
+  }
+  prefetchEinzeln(k, fehlend, fertig);
+}
+
+/* Rückfallebene: nacheinander, und immer bereit, dem Nutzer den Vortritt zu lassen. */
+function prefetchEinzeln(k, fehlend, fertig){
+  if(prefetching[k]) return;
   prefetching[k] = true;
   var chain = Promise.resolve();
   fehlend.forEach(function(e){
-    // Vor jedem Schritt nachsehen, ob der Nutzer gerade wartet – dann hat er Vorfahrt.
     chain = chain.then(function(){
       if(vorrangOffen()) return new Promise(function(r){ setTimeout(r, 1500); });
       return ensureFull(e.id, k);
     });
   });
-  chain.then(function(){
-    prefetching[k] = false;
-    if(k === kind){ store[k].lastSig = ""; render(); }
-  }).catch(function(){ prefetching[k] = false; });
+  chain.then(fertig).catch(function(){ prefetching[k] = false; });
+}
+
+/* Frisch geholte Volltexte in den Bestand einsortieren. */
+function uebernehmeEintraege(k, entries){
+  var nach = {};
+  store[k].entries.forEach(function(e, i){ nach[String(e.id)] = i; });
+  entries.forEach(function(neu){
+    var i = nach[String(neu.id)];
+    if(i != null) store[k].entries[i] = neu;
+  });
+  saveCache(k);
 }
 
 /* api-Aufruf für eine bestimmte Art (unabhängig von der aktiven Ansicht).
@@ -2100,18 +2355,21 @@ function setzeGelesen(id, wert, forKind){
   e.read = wert;
   saveCache(k);
   if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-  apiFor(k, { action:"read", id:id, value: wert ? "1" : "0" }).then(function(res){
+  apiFor(k, { action:"read", id:id, value: wert ? "1" : "0" }, { vorrang:true }).then(function(res){
     if(res && res.ok) return;
-    throw new Error((res && res.error) || "abgelehnt");
-  }).catch(function(){
+    // Der Server hat geantwortet und abgelehnt -> wirklich zurückdrehen.
     e.read = !wert; saveCache(k);
     if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-    toast("Archiv-Änderung konnte nicht gespeichert werden.", "err");
+    toast(fehlerKlartext((res && res.error) || "Archiv-Änderung abgelehnt.").text, "err");
+  }).catch(function(){
+    // Kein Netz: Änderung behalten und nachholen, sobald der Server wieder da ist.
+    aktionMerken(k, { action:"read", id:id, value: wert ? "1" : "0" });
   });
 }
 
 function setzeTagFilter(tag){
   S().tagFilter = (S().tagFilter === tag) ? "" : tag;
+  limitZuruecksetzen();
   S().lastSig = ""; render();
   window.scrollTo(0, 0);
 }
@@ -2133,6 +2391,7 @@ function serverSuche(){
 $("segRead").addEventListener("click", function(ev){
   var b = ev.target.closest("button"); if(!b) return;
   S().readFilter = b.getAttribute("data-read");
+  limitZuruecksetzen();
   updateToolbar(); S().lastSig = ""; render();
 });
 $("tagbar").addEventListener("click", function(ev){
@@ -2141,10 +2400,12 @@ $("tagbar").addEventListener("click", function(ev){
 });
 $("sortSel").addEventListener("change", function(){
   sortMode = this.value; localStorage.setItem("sortMode", sortMode);
+  limitZuruecksetzen();
   S().lastSig = ""; render();
 });
 $("zeitSel").addEventListener("change", function(){
   zeitFilter = parseInt(this.value,10)||0; localStorage.setItem("zeitFilter", String(zeitFilter));
+  limitZuruecksetzen();
   S().lastSig = ""; render();
 });
 
@@ -2313,6 +2574,7 @@ function updateTabsUI(){
   KINDS.forEach(function(k){ document.body.classList.toggle("kind-"+k, k===kind); });
 }
 function switchKind(k){
+  limitZuruecksetzen();
   if(k===kind) return;
   if(podMode) podStop();          // sonst bliebe die Podcast-Leiste ohne Inhalt stehen
   else if(tts.playing) ttsStop();
@@ -2403,10 +2665,14 @@ $("list").addEventListener("click", function(ev){
     toast("Gelöscht.", "ok");
     loescheEintrag(id);
   } else if(act === "retry"){
+    var kR = kind;
     api({ action:"retry", id:id }, { vorrang:true }).then(function(res){
       if(res && res.ok){ toast("Wird erneut versucht …", "ok"); refresh(); }
       else toast(fehlerKlartext((res && res.error) || "Erneuter Versuch nicht möglich.").text, "err");
-    }).catch(function(err){ toast(fehlerKlartext(err.message).text, "err"); });
+    }).catch(function(){
+      aktionMerken(kR, { action:"retry", id:id });
+      toast("Kein Netz – wird nachgeholt, sobald der Server antwortet.", "ok");
+    });
   } else if(act === "ask"){
     submitQuestion(id, card.querySelector(".qain"));
   } else if(act === "copy"){
@@ -2496,6 +2762,67 @@ function submitQuestion(id, input){
   }).catch(function(err){ if(input) input.disabled = false; toast(fehlerKlartext(err.message).text, "err"); });
 }
 
+/* ----------------------- Aktionen offline merken ------------------------
+   Bisher deckte die Warteschlange nur "Hinzufügen" ab. Archivieren, Löschen und Erneut-Versuchen
+   scheiterten ohne Netz still und wurden zurückgedreht – die Änderung war weg, obwohl man sie
+   bewusst gemacht hatte. Jetzt wandert jede schreibende Aktion in diese Liste und wird
+   nachgeholt, sobald der Server wieder antwortet. */
+function aktionenGet(){ try{ return JSON.parse(localStorage.getItem("aktionen")||"[]"); }catch(e){ return []; } }
+function aktionenSet(a){ try{ localStorage.setItem("aktionen", JSON.stringify(a)); }catch(e){} }
+
+function aktionMerken(k, params){
+  var liste = aktionenGet();
+  // Dieselbe Aktion für denselben Eintrag ersetzt die vorherige (zweimal archivieren ist einmal).
+  liste = liste.filter(function(x){
+    return !(x.kind === k && x.params.action === params.action &&
+             String(x.params.id||"") === String(params.id||""));
+  });
+  liste.push({ nr: "a" + Date.now() + Math.random().toString(36).slice(2,7),
+               kind:k, params:params, zeit:Date.now() });
+  if(liste.length > 200) liste = liste.slice(-200);
+  aktionenSet(liste);
+  aktionenAnzeigen();
+}
+
+function aktionenAnzeigen(){
+  var n = aktionenGet().length + outboxGet().length;
+  var el = $("offenCount");
+  if(!el) return;
+  el.textContent = n ? ("↻ " + n + " wartet" + (n===1?"":"en") + " auf den Server") : "";
+  el.style.display = n ? "" : "none";
+}
+
+var aktionenLaufen = false;
+function aktionenSenden(){
+  if(aktionenLaufen) return Promise.resolve();
+  var liste = aktionenGet();
+  if(!liste.length){ aktionenAnzeigen(); return Promise.resolve(); }
+  if(!cfg.endpoint || !cfg.secret) return Promise.resolve();
+  aktionenLaufen = true;
+  var erledigt = {};   // nach Nummer, nicht nach Objekt: die Liste wird zwischendurch neu gelesen
+  var chain = Promise.resolve();
+  liste.forEach(function(x){
+    chain = chain.then(function(){
+      return apiFor(x.kind, x.params).then(function(res){
+        // Abgelehnt heißt beantwortet: nicht endlos wiederholen.
+        if(res && (res.ok || res.error)) erledigt[x.nr] = true;
+      }).catch(function(){});   // kein Netz -> bleibt liegen
+    });
+  });
+  return chain.then(function(){
+    var anzahl = Object.keys(erledigt).length;
+    aktionenSet(aktionenGet().filter(function(x){ return !erledigt[x.nr]; }));
+    aktionenLaufen = false;
+    aktionenAnzeigen();
+    if(anzahl) refresh(kind);
+  }).catch(function(){ aktionenLaufen = false; aktionenAnzeigen(); });
+}
+
+window.addEventListener("online", function(){
+  toast("Wieder online – hole das Wartende nach.", "ok");
+  processOutbox(); aktionenSenden(); refreshAll(false);
+});
+
 /* ---- Wischen zum Löschen + Lange drücken zum Auswählen ---- */
 $("list").addEventListener("touchstart", onTouchStart, { passive: true });
 $("list").addEventListener("touchmove", onTouchMove, { passive: false });
@@ -2565,15 +2892,18 @@ function loescheEintrag(id, forKind){
   arr.splice(pos, 1);
   saveCache(k);
   if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-  return apiFor(k, { action:"delete", id:id }).then(function(res){
+  return apiFor(k, { action:"delete", id:id }, { vorrang:true }).then(function(res){
     if(res && res.ok) return true;
-    throw new Error((res && res.error) || "Der Server hat abgelehnt.");
-  }).catch(function(err){
     arr.splice(Math.min(pos, arr.length), 0, kopie);          // zurück an die alte Stelle
     saveCache(k);
     if(k === kind){ store[k].lastSig = ""; render(); } else updateCounts();
-    toast("Nicht gelöscht (" + (err.message || "Serverfehler") + ") – der Eintrag ist wieder da.", "err");
+    toast("Nicht gelöscht: " + fehlerKlartext((res && res.error) || "abgelehnt").text +
+          " – der Eintrag ist wieder da.", "err");
     return false;
+  }).catch(function(){
+    // Kein Netz: gelöscht bleibt gelöscht, der Server erfährt es beim nächsten Mal.
+    aktionMerken(k, { action:"delete", id:id });
+    return true;
   });
 }
 
@@ -3011,6 +3341,7 @@ $("scanBtn").onclick = function(){
 $("searchInput").addEventListener("input", function(){
   S().search = this.value.trim();
   S().serverIds = null;
+  limitZuruecksetzen();
   render();
   if(suchTimer) clearTimeout(suchTimer);
   suchTimer = setTimeout(serverSuche, 600);   // Server erst nach kurzer Tippause fragen
@@ -3082,8 +3413,43 @@ handleShareTarget();
 handleOpenTarget();
 flushPendingShares();
 initHistory();
+aktionenAnzeigen();
 refreshActive();   // nur der sichtbare Bereich – die anderen beim Umschalten
 processOutbox();   // beim letzten Mal nicht abgeschickte Links nachreichen
+aktionenSenden();  // Archivieren/Löschen, das ohne Netz liegen geblieben ist
+
+/* Alt-Bestand einmalig nach IndexedDB umziehen, danach von dort nachladen. Beides läuft nach
+   dem ersten Zeichnen – der Start bleibt dadurch so schnell wie vorher. */
+setTimeout(function(){
+  KINDS.forEach(function(k){
+    if(store[k].entries.some(function(e){ return e.summary; })) dbSchreiben(store[k].cacheKey, store[k].entries);
+  });
+  ladeVolltexteAusDb();
+}, 0);
+
+/* Dem Service Worker sagen, wie er den Server erreicht – damit er auch bei geschlossener App
+   nach fertigen Zusammenfassungen sehen kann (siehe Hintergrund-Abgleich unten). */
+function meldeZugangAnSW(){
+  if(!("serviceWorker" in navigator) || !cfg.endpoint || !cfg.secret) return;
+  navigator.serviceWorker.ready.then(function(reg){
+    if(reg.active) reg.active.postMessage({ typ:"zugang", endpoint:cfg.endpoint, secret:cfg.secret });
+  }).catch(function(){});
+}
+
+/* Hintergrund-Abgleich: Chrome erlaubt installierten PWAs, in Ruhephasen kurz aufzuwachen.
+   Damit meldet die App fertige Zusammenfassungen auch dann, wenn sie geschlossen ist –
+   bisher ging das nur, solange sie offen war. */
+function melderEinrichten(){
+  meldeZugangAnSW();
+  if(!("serviceWorker" in navigator) || !("periodicSync" in ServiceWorkerRegistration.prototype)) return;
+  navigator.permissions.query({ name:"periodic-background-sync" }).then(function(st){
+    if(st.state !== "granted") return;
+    return navigator.serviceWorker.ready.then(function(reg){
+      return reg.periodicSync.register("zsf-check", { minInterval: 15 * 60 * 1000 });
+    });
+  }).catch(function(){});
+}
+setTimeout(melderEinrichten, 1500);
 </script>
 </body>
 </html>
