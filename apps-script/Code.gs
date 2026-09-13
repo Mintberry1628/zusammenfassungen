@@ -29,9 +29,9 @@
  */
 function zugangsdatenSetzen() {
   var werte = {
-    GEMINI_API_KEY: '',   // aistudio.google.com/apikey
-    SHARED_SECRET:  '',   // dasselbe Passwort wie in der Handy-App
-    YT_API_KEY:     ''    // optional, fuer Likes/Kommentare
+    GEMINI_API_KEY: BOOTSTRAP.GEMINI_API_KEY,   // aistudio.google.com/apikey
+    SHARED_SECRET:  BOOTSTRAP.SHARED_SECRET,    // dasselbe Passwort wie in der Handy-App
+    YT_API_KEY:     BOOTSTRAP.YT_API_KEY        // optional, fuer Likes/Kommentare
   };
   var props = PropertiesService.getScriptProperties();
   var gesetzt = [];
@@ -39,8 +39,8 @@ function zugangsdatenSetzen() {
     if (werte[k]) { props.setProperty(k, werte[k]); gesetzt.push(k); }
   }
   Logger.log(gesetzt.length ? ('Gespeichert: ' + gesetzt.join(', ') +
-    '\nJetzt die Werte oben wieder leeren und speichern.')
-    : 'Nichts gesetzt – trage die Werte oben in der Funktion ein.');
+    '\nJetzt BOOTSTRAP oben wieder leeren und speichern.')
+    : 'Nichts gesetzt – trage die Werte oben bei BOOTSTRAP ein.');
   return zugangsdatenPruefen();
 }
 
@@ -54,12 +54,36 @@ function zugangsdatenPruefen() {
   return bericht.join(' | ');
 }
 
-/** Liest eine Skript-Eigenschaft; wirft nie, damit ein fehlender Wert nicht den Start sprengt. */
+/*
+ * EINMALIGE UEBERGABE beim Einfuegen einer neuen Fassung.
+ * Steht hier ein Wert und in den Skript-Eigenschaften noch keiner, wird er beim ersten Aufruf
+ * automatisch dorthin uebernommen. Danach kannst du die Zeilen wieder leeren – die App laeuft
+ * aus den Eigenschaften weiter. So ist nach dem Einfuegen KEIN weiterer Schritt noetig.
+ * Im Repository stehen diese Werte immer leer.
+ */
+var BOOTSTRAP = {
+  GEMINI_API_KEY: '',
+  SHARED_SECRET:  '',
+  YT_API_KEY:     ''
+};
+
+/**
+ * Liest eine Skript-Eigenschaft; wirft nie, damit ein fehlender Wert nicht den Start sprengt.
+ * Fehlt sie und BOOTSTRAP kennt einen Wert, wird er einmalig uebernommen.
+ */
 function prop_(name, standard) {
   try {
-    var v = PropertiesService.getScriptProperties().getProperty(name);
-    return (v === null || v === '') ? standard : v;
-  } catch (e) { return standard; }
+    var props = PropertiesService.getScriptProperties();
+    var v = props.getProperty(name);
+    if (v === null || v === '') {
+      var b = BOOTSTRAP[name];
+      if (b) { props.setProperty(name, b); return b; }
+      return standard;
+    }
+    return v;
+  } catch (e) {
+    return (BOOTSTRAP[name] || standard);
+  }
 }
 
 // ====================== KONFIGURATION (HIER ANPASSEN) ======================
@@ -1277,12 +1301,21 @@ function geminiVersuch(url, payload) {
     var code = res.getResponseCode();
     var body = res.getContentText();
 
-    if (code === 429 || code >= 500) {
+    // 403 gehoert hier dazu: Gemini antwortet aus Googles eigenen Rechenzentren heraus
+    // gelegentlich mit "The caller does not have permission", obwohl der Schluessel gueltig ist.
+    // Beim naechsten Versuch geht es dann durch. Bleibt es dabei, ist wirklich der Schluessel dran.
+    if (code === 429 || code === 403 || code >= 500) {
       if (versuch < GEMINI_RETRIES) {
         Utilities.sleep(wartezeiten[Math.min(versuch, wartezeiten.length - 1)]);
         continue;
       }
       var wartMsg = shortErr(body);
+      if (code === 403) {
+        throw new Error('Gemini-Fehler HTTP 403 – auch nach ' + (GEMINI_RETRIES + 1) +
+          ' Versuchen: ' + wartMsg + ' Jetzt lohnt ein Blick auf den Schluessel: in der Google ' +
+          'Cloud Console unter "Anmeldedaten" muessen die Anwendungseinschraenkungen auf KEINE ' +
+          'stehen und die "Generative Language API" erlaubt und im Projekt aktiviert sein.');
+      }
       throw new Error(code === 429
         ? ('Gemini-Kontingent erschoepft (HTTP 429) – auch nach ' + (GEMINI_RETRIES + 1) +
            ' Versuchen. ' + wartMsg)
@@ -1295,12 +1328,6 @@ function geminiVersuch(url, payload) {
       if (/token count|maximum number of tokens|exceeds the maximum/i.test(msg)) {
         throw new Error('Der Inhalt ist zu lang fuer die Gratis-Stufe (Token-Limit). Bei Videos: ' +
           'VIDEO_FPS im Skript z. B. auf 0.5 setzen. Bei Artikeln: sehr lange Texte werden gekuerzt.');
-      }
-      if (code === 403) {
-        throw new Error('Gemini-Fehler HTTP 403: ' + msg + ' – Der API-Schluessel greift nicht. ' +
-          'Pruefe in der Google Cloud Console unter "Anmeldedaten", ob beim Schluessel die ' +
-          '"Anwendungseinschraenkungen" auf KEINE stehen und die "Generative Language API" ' +
-          'erlaubt und im Projekt aktiviert ist.');
       }
       throw new Error('Gemini-Fehler HTTP ' + code + ': ' + msg);
     }

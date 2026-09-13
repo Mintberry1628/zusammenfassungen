@@ -253,21 +253,22 @@ YouTube-Links nach 🎬 und alle anderen nach 📰 – auch bei gemischten Liste
     `'gemini-2.0-flash'` (oder ein aktuelleres Flash-Modell), speichern, neu bereitstellen
     (siehe „Ich habe den Code später geändert"), dann „Erneut versuchen".
 
-**Fehler: „Gemini-Fehler HTTP 403: The caller does not have permission".**
-Das ist **immer** der API-Schlüssel, nie das Video. Der Reihe nach prüfen
-(Schlüssel danach mit `zugangsdatenSetzen()` neu hinterlegen, siehe Schritt 1b):
-1. **Schlüssel eingeschränkt?** Öffne
-   [console.cloud.google.com → APIs & Dienste → Anmeldedaten](https://console.cloud.google.com/apis/credentials),
-   klicke den Schlüssel an. Steht bei **„Anwendungseinschränkungen"** etwas anderes als **„Keine"**
-   (z. B. HTTP-Verweis-URLs oder IP-Adressen), funktioniert er aus Apps Script heraus **nicht** –
-   auf **„Keine"** stellen und speichern.
-2. **API-Einschränkung?** Direkt darunter unter **„API-Einschränkungen"** muss die
-   **„Generative Language API"** erlaubt sein (oder „Schlüssel nicht einschränken").
+**Fehler: „Gemini-Fehler HTTP 403: The caller does not have permission“.**
+Meistens ein **Aussetzer**, kein kaputter Schlüssel: derselbe Schlüssel funktioniert Sekunden
+später wieder. Gemini antwortet aus Googles Rechenzentren heraus gelegentlich so, obwohl alles
+stimmt. **Das Backend wiederholt 403 deshalb automatisch** (2 s / 8 s / 20 s), und die App startet
+zusätzlich einmal einen zweiten Versuch. In aller Regel merkst du davon nichts mehr.
+
+Bleibt der Fehler **auch nach mehreren Versuchen**, ist wirklich der Schlüssel dran:
+1. **Anwendungseinschränkungen.** [console.cloud.google.com → APIs & Dienste → Anmeldedaten](https://console.cloud.google.com/apis/credentials),
+   Schlüssel anklicken. Bei **„Anwendungseinschränkungen“** muss **„Keine“** stehen – mit
+   HTTP-Verweis-URLs oder IP-Beschränkung funktioniert er aus Apps Script heraus nicht.
+2. **API-Einschränkungen.** Direkt darunter muss die **„Generative Language API“** erlaubt sein
+   (oder „Schlüssel nicht einschränken“).
 3. **API aktiviert?** [Generative Language API aktivieren](https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com)
    – im **selben** Projekt, zu dem der Schlüssel gehört.
 4. Hilft nichts davon: unter [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-   einen **neuen Schlüssel** erzeugen und ihn per `zugangsdatenSetzen()` hinterlegen (Schritt 1b),
-   dann in der App „Erneut versuchen".
+   einen **neuen Schlüssel** erzeugen und per `zugangsdatenSetzen()` hinterlegen (Schritt 1b).
 
 **Fehler: „Von Gemini abgelehnt (STOP)."**
 Gemini hat geantwortet, aber **keinen Text** mitgeschickt. Der Grund war hausgemacht:

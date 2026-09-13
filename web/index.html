@@ -734,10 +734,15 @@ function fehlerKlartext(roh){
   var t = String(roh == null ? "" : roh).trim();
   if(!t) return { text:"Unbekannter Fehler.", tipp:"Tippe auf „Erneut versuchen“.", fluechtig:true, auto:true };
 
-  if(/403|does not have permission|PERMISSION_DENIED|API key not valid|API_KEY_INVALID/i.test(t))
-    return { text:"Gemini hat den Zugriff abgelehnt (403).",
-      tipp:"Der API-Schlüssel im Apps Script passt nicht mehr. Häufigste Ursachen: der Schlüssel ist auf bestimmte Websites oder IP-Adressen eingeschränkt (das funktioniert hier nicht), die „Generative Language API“ ist im Google-Projekt nicht aktiviert, oder der Schlüssel gehört zu einem gelöschten Projekt. Erzeuge unter aistudio.google.com/apikey einen neuen Schlüssel ohne Einschränkung und trage ihn im Apps Script bei GEMINI_KEY ein.",
+  if(/API key not valid|API_KEY_INVALID/i.test(t))
+    return { text:"Der Gemini-Schlüssel ist ungültig.",
+      tipp:"Erzeuge unter aistudio.google.com/apikey einen neuen Schlüssel und hinterlege ihn im Apps Script über zugangsdatenSetzen().",
       fluechtig:false, auto:false };
+
+  if(/403|does not have permission|PERMISSION_DENIED/i.test(t))
+    return { text:"Gemini hat den Zugriff abgelehnt (403).",
+      tipp:"Meist ein Aussetzer: derselbe Schlüssel funktioniert Sekunden später wieder. Das Backend wiederholt es inzwischen von selbst, die App zusätzlich einmal. Bleibt es dabei, prüfe den Schlüssel – Anwendungseinschränkungen auf „Keine“, „Generative Language API“ erlaubt und im Projekt aktiviert.",
+      fluechtig:true, auto:true };
 
   if(/429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(t))
     return { text:"Das Gratis-Kontingent von Gemini ist gerade aufgebraucht.",
